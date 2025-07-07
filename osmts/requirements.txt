@@ -1,0 +1,13 @@
+openpyxl
+requests
+psutil
+pexpect
+humanfriendly
+pysmartdl
+numpy
+tqdm
+pystemd
+pymysql
+rich
+setproctitle
+paramiko
