@@ -1,0 +1,11 @@
+run_tests = ['performance-test']
+saved_directory = "/root/osmts_result"
+compiler = "gcc"
+netperf_server_ip = "127.0.0.1"
+netperf_server_password = "openEuler12#$"
+sha256sumISO=""
+csmith_count = 1000
+yarpgen_count = 100
+gcc_version = "auto"
+wrk_seconds = 60
+believe_tmp = 0
