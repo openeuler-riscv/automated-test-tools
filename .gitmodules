@@ -1,0 +1,9 @@
+[submodule "penglai_tee_test/penglai_tee_test/penglai-enclave-sdk"]
+	path = penglai_tee_test/penglai-enclave-sdk
+	url = https://gitee.com/src-openeuler/penglai-enclave-sdk
+[submodule "penglai_tee_test/penglai_tee_test/penglai-enclave-driver"]
+	path = penglai_tee_test/penglai-enclave-driver
+	url = https://gitee.com/src-openeuler/penglai-enclave-driver
+[submodule "penglai_tee_test/Penglai-demo"]
+	path = penglai_tee_test/Penglai-demo
+	url = https://github.com/Penglai-Enclave/Penglai-demo
