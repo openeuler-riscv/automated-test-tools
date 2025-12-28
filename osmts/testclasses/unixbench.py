@@ -23,14 +23,14 @@ class Unixbench:
             shutil.rmtree(self.path, ignore_errors=True)
             try:
                 subprocess.run(
-                    args="git clone https://gitcode.com/gh_mirrors/by/byte-unixbench.git",
+                    args="git clone https://gitee.com/zhtianyu/byte-unixbench.git",
                     cwd="/root/osmts_tmp",
                     shell=True, check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode, 'https://gitcode.com/gh_mirrors/by/byte-unixbench.git', e.stderr)
+                raise GitCloneError(e.returncode, 'https://gitee.com/zhtianyu/byte-unixbench.git', e.stderr)
 
         if self.compiler == 'clang':
             for line in fileinput.input('/root/osmts_tmp/byte-unixbench/UnixBench/Makefile', inplace=True):

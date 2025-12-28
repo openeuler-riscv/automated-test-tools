@@ -22,14 +22,14 @@ class Llvmcase():
             # 拉取源码
             try:
                 subprocess.run(
-                    "git clone https://gitcode.com/pollyduan/llvm-project.git",
+                    "git clone https://github.com/llvm/llvm-project.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitcode.com/pollyduan/llvm-project.git',e.stderr.decode())
+                raise GitCloneError(e.returncode,'https://github.com/llvm/llvm-project.git',e.stderr.decode())
 
         # 编译llvm
         try:

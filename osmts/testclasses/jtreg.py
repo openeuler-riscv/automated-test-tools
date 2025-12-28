@@ -68,25 +68,6 @@ class Jtreg:
         with tarfile.open(fileobj=BytesIO(response.content), mode="r:xz") as tar:
             tar.extractall(path=self.path)
 
-    def archive_jtreg_output(self, jdk_version, test_path):
-        jtwork = Path(test_path) / 'JTwork'
-        jtreport = Path(test_path) / 'JTreport'
-        summary = jtreport / 'text' / 'summary.txt'
-
-        # 打包压缩
-        archive_path = self.directory / f"OpenJDK{jdk_version}_jtreg_output.tar.xz"
-        with tarfile.open(archive_path, 'w:xz') as tar:
-            if jtwork.exists():
-                tar.add(jtwork, arcname=f"OpenJDK{jdk_version}_JTwork")
-            if jtreport.exists():
-                tar.add(jtreport, arcname=f"OpenJDK{jdk_version}_JTreport")
-
-        # 拷贝 summary.txt
-        if summary.exists():
-            shutil.copy(summary, self.directory / f"OpenJDK{jdk_version}_summary.txt")
-        else:
-            print(f"[警告] OpenJDK{jdk_version} 未找到 summary.txt")
-
 
     def pre_test(self):
         if not self.directory.exists():
@@ -115,10 +96,6 @@ class Jtreg:
         )
         with open(self.directory / 'OpenJDK8.log', 'w') as log:
             log.write(jtreg.stdout.decode('utf-8'))
-        self.archive_jtreg_output(
-            jdk_version='8',
-            test_path = self.path / f'OpenJDK8-test'
-        )
         remove_rpm('java-1.8.0-openjdk*')
         print('  OpenJDK 8测试结束')
 
@@ -136,10 +113,6 @@ class Jtreg:
         )
         with open(self.directory / 'OpenJDK11.log', 'w') as log:
             log.write(jtreg.stdout.decode('utf-8'))
-        self.archive_jtreg_output(
-            jdk_version='11',
-            test_path = self.path / f'OpenJDK11-test'
-        )
         remove_rpm('java-11-openjdk*')
         print('  OpenJDK 11测试结束')
 
@@ -150,17 +123,13 @@ class Jtreg:
         jtreg = subprocess.run(
             "export JT_HOME=/root/osmts_tmp/jtreg/jtreg-7.3.1 && cd /root/osmts_tmp/jtreg/OpenJDK17-test && "
             "/root/osmts_tmp/jtreg/jtreg-7.3.1/bin/jtreg -va -ignore:quiet -jit -conc:auto -timeout:16 -tl:3590 "
-            "hotspot/jtreg:tier1 langtools:tier1 jdk:tier1 jaxp:tier1 lib-test:tier1",
+            "jtreg:tier1 langtools:tier1 jdk:tier1 jaxp:tier1 lib-test:tier1",
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
         with open(self.directory / 'OpenJDK17.log', 'w') as log:
             log.write(jtreg.stdout.decode('utf-8'))
-        self.archive_jtreg_output(
-            jdk_version='17',
-            test_path = self.path / f'OpenJDK17-test'
-        )
         remove_rpm('java-17-openjdk*')
         print('  OpenJDK 17测试结束')
 

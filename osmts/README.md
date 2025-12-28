@@ -59,23 +59,33 @@ csmith_count = 1000
 yarpgen_count = 100
 gcc_version="auto"
 believe_tmp = 0
+compare = 0
+os_version = "24.03-sp3"
+compare_version = "24.03-sp2"
+compare_path = ""
+compare_device = ["sg2042"]
 ```
 
-1. run_tests是一个列表，里面是需要测试的项目;
-2. run_tests里的值可以是开发进度里的任意个项目,如果出现'performance-test'则自动添加"fio", "stream", "iozone", "unixbench", "libmicro", "nmap", "lmbench", "netperf";
-3. 如果run_tests=["ALL"],则添加所有测试项目进去;
-3. saved_directory填写测试结果存放的目录，main.py运行结束后会在这个目录产生excel文件，默认为'/root/osmts_result';
-4. compiler是待测试的编译环境，应当填写gcc或者clang ,默认是gcc;
-5. netperf_server_ip是netserver运行的机器的ip地址，如果不测试netperf则无需填写，netserver机器可以是自己，这时候就填写127.0.0.1;指定机器上提前运行netserver -p 10000;如果指定了netperf_server_password则会尝试打开对方机器上的netserver;
-6. sha256sumISO是ISO镜像哈希校验的ISO下载地址
-6. csmith_count是csmith测试生成和编译随机c文件的数量,取值范围[100,5000],默认为1000;
-7. yarpgen_count是yarpgen测试生成随机c++文件的数量,取值范围[10,1000],默认为100;
-8. gcc_version是api_sanity_checker测试需要用到的当前系统安装的gcc的版本,可以查看/usr/lib/gcc/riscv64-openEuler-linux/目录下的子目录,是一个数字比如12,如果不想指定可以填入auto让osmts自动查询;
-9. believe_tmp=1表示尽可能使用本地已下载好的资源而不是从远程获取,调试用.
+1. run_tests 是一个列表，里面是需要测试的项目;
+2. run_tests 里的值可以是开发进度里的任意个项目，如果出现 'performance-test' 则自动添加 "fio", "stream", "iozone", "unixbench", "libmicro", "nmap", "lmbench", "netperf";
+3. 如果 run_tests=["ALL"]，则添加所有测试项目进去;
+3. saved_directory 填写测试结果存放的目录，main.py 运行结束后会在这个目录产生 excel 文件，默认为 '/root/osmts_result';
+4. compiler 是待测试的编译环境，应当填写 gcc 或者 clang, 默认是 gcc;
+5. netperf_server_ip 是 netserver 运行的机器的 ip 地址，如果不测试 netperf 则无需填写，netserver 机器可以是自己，这时候就填写127.0.0.1; 指定机器上提前运行 netserver -p 10000; 如果指定了 netperf_server_password 则会尝试打开对方机器上的 netserver;
+6. sha256sumISO 是 ISO 镜像哈希校验的 ISO 下载地址
+6. csmith_count 是 csmith 测试生成和编译随机 c 文件的数量，取值范围[100,5000]，默认为 1000;
+7. yarpgen_count 是 yarpgen 测试生成随机 c++ 文件的数量，取值范围[10,1000]，默认为 100;
+8. gcc_version 是 api_sanity_checker 测试需要用到的当前系统安装的 gcc 的版本，可以查看 /usr/lib/gcc/riscv64-openEuler-linux/ 目录下的子目录，是一个数字比如 12，如果不想指定可以填入 auto 让 osmts 自动查询;
+9. believe_tmp=1 表示尽可能使用本地已下载好的资源而不是从远程获取，调试用;
+10. compare 表示是否进行性能结果对比，0 为不对比，1 为对比;
+11. os_version 表示当前系统版本;
+12. compare_version 表示与哪一个系统版本进行对比；
+13. compare_path 表示对比的结果路径，如 "/root/oerv-qa/testreport/24.03sp2/performance-test"；
+14. compare_device 表示对比的硬件类型，如 lpi4a 或 sg2042
 
 
 
-有的测试项目会运行很长一段时间，把main.py一直挂着就好，推荐在screen/tmux这样的终端复用器里运行，防止意外终止运行。
+有的测试项目会运行很长一段时间，把 main.py 一直挂着就好，推荐在 screen/tmux 这样的终端复用器里运行，防止意外终止运行。
 
 ---
 

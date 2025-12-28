@@ -247,14 +247,14 @@ class MMTests:
             shutil.rmtree(self.path, ignore_errors=True)
             try:
                 subprocess.run(
-                    "git clone https://gitcode.com/gh_mirrors/mm/mmtests.git",
+                    "git clone https://gitee.com/zhtianyu/mmtests.git",
                     cwd="/root/osmts_tmp/",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitcode.com/gh_mirrors/mm/mmtests.git'.stderr.decode('utf-8'))
+                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/mmtests.git'.stderr.decode('utf-8'))
 
 
 
