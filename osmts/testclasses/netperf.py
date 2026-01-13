@@ -39,14 +39,15 @@ class Netperf(object):
         self.client = get_client(self.server_ip, self.netperf_server_password,22)
         stdin,stdout,stderr = self.client.exec_command('ps aux|grep netserver|grep -v grep')
         if stdout.channel.recv_exit_status() != 0:
-            stdin,stdout,stderr = self.client.exec_command('dnf install netperf-y && netserver -p 10000')
+            stdin,stdout,stderr = self.client.exec_command('dnf install netperf -y && netserver -p 10000')
             if stdout.channel.recv_exit_status() != 0:
                 raise DefaultError("在远程机器上自动运行netserver失败")
             self.netserver_created_by_osmts_remote = True
         stdin,stdout,stderr = self.client.exec_command('systemctl is-active firewalld')
-        self.is_active = stdout.read()
+        self.is_active = stdout.read().decode().strip()
         if self.is_active == "active":
             stdin, stdout, stderr = self.client.exec_command("systemctl stop firewalld")
+        print(f"Server IP: '{self.server_ip}'")
 
 
     def run_test(self):

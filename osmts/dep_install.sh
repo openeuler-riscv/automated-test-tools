@@ -13,8 +13,8 @@ fi
 
 # 安装基础依赖
 echo "正在安装系统依赖..." | tee -a $LOG_FILE
-dnf install -y gcc g++ cmake python python3-devel python3-pip python3-Cython \
-    python3-psycopg2 python3-paramiko systemd-devel libxml2 libxslt \
+dnf install -y gcc g++ cmake python python3-devel python3-pip python3-Cython python3-xlrd python3-openpyxl \
+    python3-psycopg2 python3-paramiko python3-numpy python3-pandas systemd-devel libxml2 libxslt \
     libxslt-devel libxml2-devel tmux automake autoconf ntp 2>&1 | tee -a $LOG_FILE
 
 if [ ${PIPESTATUS} -ne 0 ]; then

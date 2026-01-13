@@ -6,7 +6,8 @@ import sys,psutil,time
 import tomllib,ipaddress
 import subprocess,argparse,humanfriendly
 from pathlib import Path
-
+import shutil
+import os
 
 from rich.console import Console
 from rich.traceback import install
@@ -14,6 +15,7 @@ from rich.table import Table
 from setproctitle import setproctitle
 from testclasses import osmts_tests
 from testclasses.errors import *
+from performance_compare import compare_perf
 
 
 setproctitle('osmts')
@@ -168,6 +170,11 @@ def parse_config(config:dict) -> dict:
     gcc_version: str = str(config.get("gcc_version", "auto"))
     wrk_seconds: int = int(config.get("wrk_seconds", 60))
     sha256sumISO:str = str(config.get("sha256sumISO", ""))
+    compare: bool = bool(config.get("compare", None))
+    os_version: str = str(config.get("os_version", ""))
+    compare_version: str = str(config.get("compare_version", ""))
+    compare_path: str = str(config.get("compare_path", ""))
+    compare_device = config.get("compare_device", None)
 
 
     # csmith测试输入参数
@@ -219,7 +226,12 @@ def parse_config(config:dict) -> dict:
         'yarpgen_count' : yarpgen_count,
         'gcc_version' : gcc_version,
         'wrk_seconds' : wrk_seconds,
-        'sha256sumISO':sha256sumISO
+        'sha256sumISO':sha256sumISO,
+        'compare':compare,
+        'os_version':os_version,
+        'compare_version':compare_version,
+        'compare_path':compare_path,
+        'compare_device':compare_device
     }
 
 
@@ -312,3 +324,20 @@ if __name__ == '__main__':
 
     console.print(table)
     console.print(f"osmts运行结束,本次运行总耗时{humanfriendly.format_timespan(time.time() - start_time)}")
+
+    if parameter_list.get("compare"):
+        source_dir = parameter_list.get("saved_directory")
+        target_dir = f"./{parameter_list.get('os_version')}/{parameter_list.get('compare_device')[0]}"
+        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+        source_dir = parameter_list.get("compare_path")
+        target_dir = f"./{parameter_list.get('compare_version')}"
+        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+        versions = [parameter_list.get("os_version"),parameter_list.get("compare_version")]
+        console.print(f"osmts开始对比当前系统版本（{parameter_list.get('os_version')}）与 {parameter_list.get('compare_version')} 的性能测试结果")
+        compare_perf.compare_perf(versions,parameter_list.get("compare_device"))
+        target_dir = f"./{parameter_list.get('saved_directory')}/performance"
+        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        shutil.move("comparison_sg2042.xlsx", target_dir)
+        console.print(f"osmts开始对比性能测试结果完成，结果保存在：/{parameter_list.get('saved_directory')}/performance")

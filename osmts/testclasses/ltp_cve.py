@@ -26,7 +26,7 @@ class Ltp_cve:
                 shutil.rmtree(self.path)
 
             git_clone = subprocess.run(
-                "cd /root/osmts_tmp/ && git clone https://gitcode.com/gh_mirrors/ltp/ltp.git",
+                "cd /root/osmts_tmp/ && git clone https://gitee.com/zhtianyu/ltp.git",
                 shell=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,

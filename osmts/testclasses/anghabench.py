@@ -43,13 +43,13 @@ class AnghaBench:
             # 拉取AnghaBench的源码
             try:
                 subprocess.run(
-                    f"cd /root/osmts_tmp/ && git clone https://gitcode.com/qq_61653333/AnghaBench.git",
+                    f"cd /root/osmts_tmp/ && git clone https://gitee.com/zhtianyu/angha-bench.git",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitcode.com/qq_61653333/AnghaBench.git',e.stderr)
+                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/angha-bench.git',e.stderr)
 
 
 
