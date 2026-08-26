@@ -5,6 +5,9 @@
 ### 2. 使用方法
 
 执行 openssl.sh 执行 openssl speed 性能测试
+````
+$ bash openssl.sh
+````
 
 该脚本会调用 compare_result.py 脚本来比较 Backport 后有无 Zbb 的测试结果，最后生成 markdown 格式表格
 
