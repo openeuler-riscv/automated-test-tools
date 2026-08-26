@@ -6,7 +6,16 @@
 
 由于用于性能对比的程序要求 Golang 版本大于 1.25，openEuler 的 Golang 版本是 1.21.4 ，无法满足要求，所以需要在其他环境中安装。
 
-该脚本的执行环境是 ubuntu，通过 ssh 远程在 openEuler 物理机中调用 golang.sh 脚本执行测试。执行方法在 ubuntu 中执行以下命令
+该脚本的执行环境是 ubuntu，通过 ssh 远程在 openEuler 物理机中调用 golang.sh 脚本执行测试。
+在 run.sh 脚本中配置 ssh 链接 openeuler 的 ip，port，user name，password
+
+````
+REMOTE_USER="root"
+REMOTE_HOST="localhost"
+REMOTE_PORT="12055"
+SSHPASS="openEuler12#\$"
+````
+配置好后执行方法在 ubuntu 中执行以下命令
 
 ````
 $ bash run.sh
