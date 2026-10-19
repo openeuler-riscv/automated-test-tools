@@ -37,13 +37,13 @@ run_and_log "正在安装系统依赖..." \
     python python3-devel python3-pip python3-Cython python3-xlrd python3-openpyxl \
     python3-psycopg2 python3-paramiko python3-numpy python3-pandas \
     systemd-devel libxml2 libxslt libxslt-devel libxml2-devel \
-    tmux automake autoconf ntp
+    tmux automake autoconf
 
 # 手动同步时间，失败仅告警，不阻断后续安装
-echo "手动同步时间..." | tee -a "$LOG_FILE"
-if ! ntpdate cn.pool.ntp.org 2>&1 | tee -a "$LOG_FILE"; then
-    echo "时间同步失败，后续如果遇到SSL或证书问题，请优先检查系统时间" | tee -a "$LOG_FILE"
-fi
+# echo "手动同步时间..." | tee -a "$LOG_FILE"
+# if ! ntpdate cn.pool.ntp.org 2>&1 | tee -a "$LOG_FILE"; then
+#     echo "时间同步失败，后续如果遇到SSL或证书问题，请优先检查系统时间" | tee -a "$LOG_FILE"
+# fi
 
 # 升级pip和setuptools
 run_and_log "升级Python工具链..." \

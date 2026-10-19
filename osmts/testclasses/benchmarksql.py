@@ -13,6 +13,7 @@ import subprocess,shutil
 from io import BytesIO
 
 from .errors import DefaultError,RunError,SummaryError
+from .utils import decode_output
 
 
 headers = {
@@ -685,7 +686,7 @@ class BenchMarkSQL:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"benchmarksql测试出错.重启postgresql.service失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"benchmarksql测试出错.重启postgresql.service失败,报错信息:{decode_output(e.stderr)}")
 
         time.sleep(5)
         self.postgresql.load(force=True)
@@ -766,7 +767,7 @@ class BenchMarkSQL:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode, e.stderr.decode('utf-8'))
+            raise RunError(e.returncode, decode_output(e.stderr))
 
         output = self._save_process_output(result, log_file)
         self._raise_if_known_failure(output, log_file, stage_desc)
@@ -837,7 +838,7 @@ class BenchMarkSQL:
                     stderr=subprocess.PIPE
                 )
             except subprocess.CalledProcessError as e:
-                raise DefaultError(f"benchmarksql测试出错.初始化postgresql数据库失败,报错信息:{e.stderr.decode('utf-8')}")
+                raise DefaultError(f"benchmarksql测试出错.初始化postgresql数据库失败,报错信息:{decode_output(e.stderr)}")
 
         self.postgresql:Unit = Unit('postgresql.service',_autoload=True)
         try:

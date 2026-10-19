@@ -3,6 +3,7 @@ import subprocess,shutil,re
 from openpyxl import Workbook
 
 from .errors import GitCloneError,CompileError,RunError
+from .utils import decode_output
 
 
 class Libmicro:
@@ -23,14 +24,14 @@ class Libmicro:
             # 获取源码
             try:
                 subprocess.run(
-                    args="git clone https://gitee.com/zhtianyu/libmicro.git",
+                    args="GIT_TERMINAL_PROMPT=0 git clone https://gitee.com/zhtianyu/libmicro.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/libmicro.git',e.stderr.decode())
+                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/libmicro.git',decode_output(e.stderr))
 
 
         # 开始编译
@@ -52,7 +53,7 @@ class Libmicro:
                     stderr=subprocess.PIPE
                 )
         except subprocess.CalledProcessError as e:
-            raise CompileError(e.returncode,self.compiler,e.stderr.decode())
+            raise CompileError(e.returncode,self.compiler,decode_output(e.stderr))
 
 
     def run_test(self):
@@ -65,9 +66,9 @@ class Libmicro:
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,e.stderr.decode())
+            raise RunError(e.returncode,decode_output(e.stderr))
         else:
-            self.test_result = bench.stdout.decode('utf-8')
+            self.test_result = decode_output(bench.stdout)
         if not self.directory.exists():
             self.directory.mkdir(exist_ok=True,parents=True)
         with open(self.directory / 'libmicro.log','w') as file:

@@ -3,6 +3,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from .errors import RunError,SummaryError
+from .utils import decode_output
 
 
 class Nmap:
@@ -21,7 +22,7 @@ class Nmap:
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,e.stderr.decode('utf-8'))
+            raise RunError(e.returncode,decode_output(e.stderr))
         else:
             self.test_result = nmap.stdout.decode('utf-8')
 

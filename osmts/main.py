@@ -15,6 +15,7 @@ from rich.table import Table
 from setproctitle import setproctitle
 from testclasses import osmts_tests
 from testclasses.errors import *
+from testclasses.utils import decode_output
 from performance_compare import compare_perf
 
 
@@ -66,7 +67,7 @@ def netperf_judge(netperf_server_ip:str):
                     stderr=subprocess.PIPE
                 )
                 if install_netperf.returncode != 0:
-                    print(f"netperf测试出错:rpm包安装失败.报错信息:{install_netperf.stderr.decode('utf-8')}")
+                    print(f"netperf测试出错:rpm包安装失败.报错信息:{decode_output(install_netperf.stderr)}")
                     sys.exit(1)
                 subprocess.run(
                     "netserver -p 10000",
@@ -84,6 +85,8 @@ def netperf_judge(netperf_server_ip:str):
 
 
 def from_tests_to_tasks(run_tests:list,parameter_list:dict) -> dict:
+    # 复制一份:下面的 remove 会原地修改列表,不能污染调用方(以及调用方的 toml 配置对象)
+    run_tests = list(run_tests)
     support_tests = list(osmts_tests.keys())
     support_tests_count = len(support_tests)
     tasks = set()
@@ -112,6 +115,11 @@ def from_tests_to_tasks(run_tests:list,parameter_list:dict) -> dict:
     # 需要额外资源的测试进行检查
     if 'netperf' in tasks:
         netperf_judge(parameter_list.get('netperf_server_ip'))
+        # netperf_judge 可能在本机启动了 netserver(把全局置 True),
+        # 而 parse_config 是在那之前快照该值的。这里重新读取一次并回写,
+        # 否则 netperf.post_test 里"terminate 本地 netserver"的分支恒为假,
+        # osmts 自己启动的 netserver 永远不会被关闭。
+        parameter_list['netserver_created_by_osmts'] = netserver_created_by_osmts
     if 'fio' in tasks:
         fio_judge()
 
@@ -147,7 +155,7 @@ def from_tests_to_tasks(run_tests:list,parameter_list:dict) -> dict:
         stderr=subprocess.PIPE
     )
     if install_rpms.returncode != 0:
-        error_log = install_rpms.stderr.decode('utf-8')
+        error_log = decode_output(install_rpms.stderr)
         print(f"安装所有所需的rpm包失败.报错信息:{error_log}")
         if 'Bad value of LRO_MAXPARALLELDOWNLOADS' in error_log:
             print("请检查/etc/dnf/dnf.conf配置文件里的max_parallel_doanloads参数,值最大为20!")
@@ -274,7 +282,92 @@ def parse_config(config:dict) -> dict:
 
 
 
+def collect_crash_logs(saved_directory: Path):
+    """检测是否发生过内核崩溃(panic/oops),自动收集日志到结果目录
+
+    板子崩溃自动重启后,下次运行osmts时把现场材料保存下来,
+    方便远程无串口场景下定位问题。
+    注意:板子RTC常坏导致journald的-b偏移失效,这里直接全量搜索journal
+    """
+    crash_grep = subprocess.run(
+        "journalctl --no-pager 2>/dev/null | grep -iE 'kernel panic|Oops|BUG:' | tail -100",
+        shell=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    pstore = Path('/sys/fs/pstore')
+    pstore_files = list(pstore.glob('*')) if pstore.exists() else []
+    if not (crash_grep.strip() or pstore_files):
+        return
+    crash_dir = saved_directory / 'crash-logs'
+    crash_dir.mkdir(parents=True, exist_ok=True)
+    (crash_dir / 'panic_matches.log').write_text(crash_grep)
+    kernel_tail = subprocess.run(
+        "journalctl -k --no-pager 2>/dev/null | tail -2000",
+        shell=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    (crash_dir / 'kernel_tail.log').write_text(kernel_tail)
+    for f in pstore_files:
+        shutil.copy2(f, crash_dir / f.name)
+    kirk_log = saved_directory / 'ltp' / 'kirk.log'
+    if kirk_log.exists():
+        tail = '\n'.join(kirk_log.read_text(errors='replace').splitlines()[-30:])
+        (crash_dir / 'kirk.log.tail').write_text(tail)
+    console.print(f"检测到内核崩溃痕迹,崩溃日志已保存到:{crash_dir}")
+
+
+def classify_failure(test_name:str, e:Exception) -> tuple:
+    """把一个测试类抛出的异常归类为结果表格的一行:(状态, 失败原因, 注解)。
+
+    归类逻辑从 run_all_tests() 抽出来,便于单元测试直接覆盖
+    (见 tests/test_failure_never_kills_run.py)。
+
+    注意:这里只处理 Exception 子类。SystemExit 继承 BaseException,
+    不会被这里捕获 —— 所以测试类在任何失败路径上都不得调用 sys.exit(),
+    否则整个 osmts 进程会直接退出,结果表与后续测试全部丢失。
+    """
+    if isinstance(e, GitCloneError):
+        stderr_text = e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else str(e.stderr)
+        if stderr_text.strip():
+            stderr_tail = '\n'.join(stderr_text.splitlines()[-5:])
+        else:
+            stderr_tail = '(git无stderr输出)'
+        console.print(f"{test_name}出现git clone错误,退出测试,git报错尾部:\n{stderr_tail}")
+        return ('failed', f'git clone运行失败,返回值:{e.error_code}', e.url)
+
+    if isinstance(e, CompileError):
+        console.print(f"{test_name}出现编译失败问题,退出测试")
+        return ('failed', f'编译失败,返回值:{e.error_code}', e.stderr)
+
+    if isinstance(e, SummaryError):
+        console.print(f"{test_name}在把运行结果总结为Excel时出错,退出测试.详细信息请查看:{e.fileName}")
+        return ('failed', '运行成功但是总结为Excel时出错,有必要时请给osmts项目提交issue', '详细报错信息请查看文件:' + str(e.fileName))
+
+    if isinstance(e, RunError):
+        console.print(f"{test_name}在运行测试命令时出错,退出测试")
+        return ('failed', f'测试运行时出错,返回值:{e.error_code}', e.stderr)
+
+    if isinstance(e, DefaultError):
+        console.print(f"{test_name}抛出一个默认异常,{e}")
+        return ('failed', '默认异常', str(e))
+
+    if isinstance(e, DnfError):
+        console.print(f"{test_name}在使用yum/dnf包管理器时异常")
+        return ('failed', '使用yum/dnf包管理器时发生错误,请检查网络或repo环境', e.stderr)
+
+    if isinstance(e, DBusNoSuchUnitError):
+        console.print(f"{test_name}测试中用到的service服务不存在.")
+        return ('failed', 'systemd service missing.', str(e))
+
+    console.print(f"出现了未被预料的错误,{e}")
+    console.print("如有需要可以向osmts项目提交issue")
+    return ('failed', '也许是osmts的设计缺陷导致', str(e))
+
+
 def run_all_tests():
+    collect_crash_logs(parameter_list.get('saved_directory'))
     console.print(f"本次osmts脚本执行将进行的测试:{list(testClasses.keys())}(代表执行顺序)")
     console.print(f"运行时请勿删除{osmts_tmp_dir}和{parameter_list.get('saved_directory')}")
 
@@ -287,34 +380,79 @@ def run_all_tests():
             console.print(table)
             console.print(f"osmts运行结束,本次运行总耗时{humanfriendly.format_timespan(time.time() - start_time)}")
             sys.exit(1)
-        except GitCloneError as e:
-            console.print(f"{testName}出现git clone错误,退出测试")
-            table.add_row(testName,'failed',f'git clone运行失败,返回值:{e.error_code}',e.url)
-        except CompileError as e:
-            console.print(f"{testName}出现编译失败问题,退出测试")
-            table.add_row(testName,'failed',f'编译失败,返回值:{e.error_code}',e.stderr)
-        except SummaryError as e:
-            console.print(f"{testName}在把运行结果总结为Excel时出错,退出测试.详细信息请查看:{e.fileName}")
-            table.add_row(testName,'failed','运行成功但是总结为Excel时出错,有必要时请给osmts项目提交issue','详细报错信息请查看文件:' + str(e.fileName))
-        except RunError as e:
-            console.print(f"{testName}在运行测试命令时出错,退出测试")
-            table.add_row(testName,'failed',f'测试运行时出错,返回值:{e.error_code}',e.stderr)
-        except DefaultError as e:
-            console.print(f"{testName}抛出一个默认异常,{e}")
-            table.add_row(testName,'failed','默认异常',str(e))
-        except DnfError as e:
-            console.print(f"{testName}在使用yum/dnf包管理器时异常")
-            table.add_row(testName,'failed','使用yum/dnf包管理器时发生错误,请检查网络或repo环境',e.stderr)
-        except DBusNoSuchUnitError as e:
-            console.print(f"{testName}测试中用到的service服务不存在.")
-            table.add_row(testName, 'failed', 'systemd service missing.', str(e))
         except Exception as e:
-            console.print(f"出现了未被预料的错误,{e}")
-            console.print("如有需要可以向osmts项目提交issue")
-            table.add_row(testName, 'failed', '也许是osmts的设计缺陷导致', str(e))
+            # 归一到同一处:所有 Exception 子类都只映射成一行 failed,不中断循环
+            status, reason, note = classify_failure(testName, e)
+            table.add_row(testName, status, reason, note)
         else:
             table.add_row(testName,'success','/')
 
+
+
+def move_comparison_results(saved_directory:Path, devices:list) -> list:
+    """把 compare_perf 生成的 comparison_<device>.xlsx 移到结果目录的 performance/ 下。
+
+    原先的写法有两处缺陷:
+    - target_dir = f"./{saved_directory}/performance" 会拼成
+      ".//root/osmts_result/performance",把结果挪到 os.getcwd() 下;
+    - 源文件名硬编码 comparison_sg2042.xlsx,compare_device 不是 sg2042 时
+      直接 FileNotFoundError。
+
+    返回实际移动成功的文件路径列表;缺失的只告警不抛异常,避免中断收尾流程。
+    """
+    if not devices:
+        raise ValueError("compare_device 为空,无法确定要对比的设备性能结果")
+
+    work_dir = os.getcwd()
+    target_dir = saved_directory / 'performance'
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    moved = []
+    for device in devices:
+        file_name = f"comparison_{device}.xlsx"
+        source = Path(work_dir) / file_name
+        if not source.exists():
+            print(f"警告:未找到性能对比结果文件{source},跳过该设备的对比结果归档")
+            continue
+        shutil.move(str(source), str(target_dir / file_name))
+        moved.append(target_dir / file_name)
+    return moved
+
+
+def run_comparison(parameter_list:dict) -> list:
+    """compare=1 时的收尾流程:归档两版结果 → 调用 compare_perf → 归档对比文件。
+
+    抽成函数便于单元测试(原先该逻辑内联在 __main__ 里,无法被测试覆盖,
+    其中的路径拼接与硬编码文件名缺陷因此长期未被发现)。
+    """
+    devices = parameter_list.get("compare_device")
+    if not devices:
+        raise ValueError("compare_device 为空,无法确定要对比的设备性能结果")
+
+    work_dir = Path(os.getcwd())
+
+    # 本次运行结果 → ./<os_version>/<device>/
+    target_dir = work_dir / str(parameter_list.get("os_version")) / devices[0]
+    target_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(parameter_list.get("saved_directory"), target_dir, dirs_exist_ok=True)
+
+    # 历史对照结果 → ./<compare_version>/
+    compare_source = parameter_list.get("compare_path")
+    if not compare_source:
+        raise ValueError("compare=1 时必须指定 compare_path(对照版本的性能结果目录)")
+    compare_target = work_dir / str(parameter_list.get("compare_version"))
+    compare_target.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(compare_source, compare_target, dirs_exist_ok=True)
+
+    versions = [parameter_list.get("os_version"), parameter_list.get("compare_version")]
+    console.print(f"osmts开始对比当前系统版本（{versions[0]}）与 {versions[1]} 的性能测试结果")
+    compare_perf.compare_perf(versions, devices)
+
+    moved = move_comparison_results(parameter_list.get("saved_directory"), devices)
+    console.print(f"osmts对比性能测试结果完成,结果保存在:{parameter_list.get('saved_directory')}/performance")
+    for path in moved:
+        console.print(f"  - {path}")
+    return moved
 
 
 if __name__ == '__main__':
@@ -364,18 +502,4 @@ if __name__ == '__main__':
     console.print(f"osmts运行结束,本次运行总耗时{humanfriendly.format_timespan(time.time() - start_time)}")
 
     if parameter_list.get("compare"):
-        source_dir = parameter_list.get("saved_directory")
-        target_dir = f"./{parameter_list.get('os_version')}/{parameter_list.get('compare_device')[0]}"
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
-        source_dir = parameter_list.get("compare_path")
-        target_dir = f"./{parameter_list.get('compare_version')}"
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
-        versions = [parameter_list.get("os_version"),parameter_list.get("compare_version")]
-        console.print(f"osmts开始对比当前系统版本（{parameter_list.get('os_version')}）与 {parameter_list.get('compare_version')} 的性能测试结果")
-        compare_perf.compare_perf(versions,parameter_list.get("compare_device"))
-        target_dir = f"./{parameter_list.get('saved_directory')}/performance"
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-        shutil.move("comparison_sg2042.xlsx", target_dir)
-        console.print(f"osmts开始对比性能测试结果完成，结果保存在：/{parameter_list.get('saved_directory')}/performance")
+        run_comparison(parameter_list)

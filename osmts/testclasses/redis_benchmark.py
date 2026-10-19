@@ -7,6 +7,7 @@ import csv,time
 import subprocess,shutil
 
 from .errors import DefaultError,RunError,SummaryError
+from .utils import decode_output
 
 
 TEST_COMMANDS = (
@@ -69,9 +70,9 @@ class redisBenchMark: # redis-benchmark 是 Redis 自带的基准测试工具
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,e.stderr.decode())
+            raise RunError(e.returncode,decode_output(e.stderr))
         else:
-            self.test_result = redis_bench_mark.stdout.decode('utf-8')
+            self.test_result = decode_output(redis_bench_mark.stdout)
             with open(self.directory / 'redis-benchmark.csv', 'w', encoding='utf-8', newline='') as csv_file:
                 csv_file.write(self.test_result)
 
@@ -110,7 +111,7 @@ class redisBenchMark: # redis-benchmark 是 Redis 自带的基准测试工具
         return rows
 
 
-    def result2symmary(self):
+    def result2summary(self):
         parsed_rows = self._parse_csv_rows()
 
         wb = Workbook()
@@ -197,6 +198,10 @@ class redisBenchMark: # redis-benchmark 是 Redis 自带的基准测试工具
         wb.save(self.directory / 'redis-benchmark.xlsx')
 
 
+    # 旧名兼容:历史代码/外部脚本可能仍按拼写错误的名字调用
+    result2symmary = result2summary
+
+
     def post_test(self):
         self.redis.Unit.Stop(b'replace')
         time.sleep(5)
@@ -210,7 +215,7 @@ class redisBenchMark: # redis-benchmark 是 Redis 自带的基准测试工具
         self.pre_test()
         self.run_test()
         try:
-            self.result2symmary()
+            self.result2summary()
         except Exception as e:
             logFile = self.directory / 'redisBenchmark_summary_error.log'
             with open(logFile,'w') as log:

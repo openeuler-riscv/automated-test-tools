@@ -3,6 +3,7 @@ import subprocess,shutil,pexpect
 from openpyxl import Workbook
 
 from .errors import GitCloneError,RunError,SummaryError
+from .utils import decode_output
 
 
 class Lmbench:
@@ -27,14 +28,14 @@ class Lmbench:
         # 获取lmbench源码
         try:
             subprocess.run(
-                "git clone https://gitee.com/April_Zhao/lmbench.git",
+                "GIT_TERMINAL_PROMPT=0 git clone https://gitee.com/April_Zhao/lmbench.git",
                 cwd="/root/osmts_tmp",
                 shell=True,check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise GitCloneError(e.returncode,'https://gitee.com/April_Zhao/lmbench.git',e.stderr.decode())
+            raise GitCloneError(e.returncode,'https://gitee.com/April_Zhao/lmbench.git',decode_output(e.stderr))
 
 
     def run_test(self):
@@ -105,10 +106,11 @@ class Lmbench:
                 "cd /root/osmts_tmp/lmbench && make see",
                 shell=True,check=True,
                 stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,e.stderr.decode('utf-8'))
+            raise RunError(e.returncode,decode_output(e.stderr))
 
         shutil.copyfile('/root/osmts_tmp/lmbench/results/summary.out',self.directory / 'lmbench_summary.out')
 

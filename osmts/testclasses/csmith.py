@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
-import sys,subprocess,shutil
+import subprocess,shutil
 from openpyxl import Workbook
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor,as_completed
 
 from .errors import GitCloneError,DefaultError
+from .utils import decode_output
 
 
 class Csmith:
@@ -29,10 +30,12 @@ class Csmith:
             stderr=subprocess.PIPE,
         )
         if csmith.returncode != 0:
-            print(f"csmith测试出错.生成c代码失败,报错信息:{csmith.stderr.decode('utf-8')}")
-            sys.exit(1)
+            # 不能用 sys.exit:SystemExit 不被 main.py 捕获,会终止整个osmts运行
+            raise DefaultError(
+                f"csmith测试出错.生成c代码失败,返回值:{csmith.returncode}.报错信息:{decode_output(csmith.stderr)}"
+            )
         with open(f"{self.source}/csmith{number}.c", "w") as file:
-            file.write(csmith.stdout.decode('utf-8'))
+            file.write(decode_output(csmith.stdout))
 
         # 分别用gcc和clang编译c文件
         compile = subprocess.run(
@@ -43,8 +46,12 @@ class Csmith:
             stderr=subprocess.DEVNULL,
         )
         if compile.returncode != 0:
-            print(f"csmith测试出错.编译c代码失败,报错信息:{compile.stderr.decode('utf-8')}")
-            sys.exit(1)
+            # stdout/stderr 都是 DEVNULL,拿不到 gcc/clang 的诊断,只能报告返回值
+            # 与复现路径(原先是 compile.stderr.decode(),恒为 None 会抛 AttributeError)
+            raise DefaultError(
+                f"csmith测试出错.编译c代码失败,返回值:{compile.returncode}"
+                f"(gcc/clang的输出已丢弃,请手动复现:{source_code})"
+            )
 
 
     def pre_test(self):
@@ -62,14 +69,14 @@ class Csmith:
 
         try:
             subprocess.run(
-                "git clone https://github.com/csmith-project/csmith.git -b master",
+                "GIT_TERMINAL_PROMPT=0 git clone https://github.com/csmith-project/csmith.git -b master",
                 cwd="/root/osmts_tmp/",
                 shell=True,check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise GitCloneError(e.returncode,'https://github.com/csmith-project/csmith.git',e.stderr.decode('utf-8'))
+            raise GitCloneError(e.returncode,'https://github.com/csmith-project/csmith.git',decode_output(e.stderr))
 
 
         try:
@@ -81,7 +88,7 @@ class Csmith:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"Csmith测试出错.构建csmith项目失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"Csmith测试出错.构建csmith项目失败,报错信息:{decode_output(e.stderr)}")
 
 
         # 批量生成c代码
@@ -109,17 +116,22 @@ class Csmith:
         if gcc.returncode == 124 or clang.returncode == 124:
             return (id, None, None, "跳过(执行超时)")
         if gcc.returncode != 0 or clang.returncode != 0:
-            reason = None
+            # 逐个收集失败原因再拼接。原先写成
+            #   reason = f"{reason}, " if reason else "" + f"clang..."
+            # 由于 + 的优先级高于条件表达式,等价于
+            #   reason = (f"{reason}, ") if reason else ("" + f"clang...")
+            # 于是 gcc 已失败时 clang 的信息被整段丢弃
+            reasons = []
             if gcc.returncode < 0:
-                reason = f"gcc运行时崩溃(信号{-gcc.returncode})"
+                reasons.append(f"gcc运行时崩溃(信号{-gcc.returncode})")
             elif gcc.returncode > 0:
-                reason = f"gcc执行异常退出(返回码{gcc.returncode})"
+                reasons.append(f"gcc执行异常退出(返回码{gcc.returncode})")
             if clang.returncode < 0:
-                reason = f"{reason}, " if reason else "" + f"clang运行时崩溃(信号{-clang.returncode})"
+                reasons.append(f"clang运行时崩溃(信号{-clang.returncode})")
             elif clang.returncode > 0:
-                reason = f"{reason}, " if reason else "" + f"clang执行异常退出(返回码{clang.returncode})"
-            return (id, None, None, reason)
-        return (id, gcc.stdout.decode('utf-8'), clang.stdout.decode('utf-8'), None)
+                reasons.append(f"clang执行异常退出(返回码{clang.returncode})")
+            return (id, None, None, ', '.join(reasons))
+        return (id, decode_output(gcc.stdout), decode_output(clang.stdout), None)
 
 
     def run_test(self):

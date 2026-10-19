@@ -9,6 +9,7 @@ from io import BytesIO
 from tqdm import tqdm
 
 from .errors import DefaultError,GitCloneError
+from .utils import decode_output
 
 
 headers = {
@@ -57,7 +58,6 @@ MMTESTS_CONFIGS = (
 'config-workload-poundsyscall',
 'config-workload-spinplace-long',
 'config-workload-spinplace-short',
-'config-multi-tbench__netperf-tcp-rr',
 'config-workload-stream-omp-llcs',
 'config-workload-stream-omp-nodes',
 'config-workload-stream-single',
@@ -133,7 +133,7 @@ class MMTests:
             'libacl-devel','openssl','openssl-devel','numactl-devel','libaio-devel',
             'glibc-devel','libcap-devel','patch','findutils','libtirpc','libtirpc-devel',
             'kernel-headers','glibc-headers','hwloc-devel','numactl','automake','fio',
-            'sysstat','time','psmisc','popt-devel','libstdc++','libstdc++-static',
+            'sysstat','time','psmisc','popt-devel','libstdc++',
             'elfutils-libelf-devel','slang-devel','libbabeltrace-devel','zstd-devel',
             'gtk2-devel','systemtap','libtool','rpcgen','vim','autoconf','automake',
             'python3-rpm-macros','binutils-devel','coreutils','kernel-tools','e2fsprogs',
@@ -216,7 +216,7 @@ class MMTests:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"mmtests测试出错.R-4.4.0构建失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"mmtests测试出错.R-4.4.0构建失败,报错信息:{decode_output(e.stderr)}")
 
         # 创建软链接
         shutil.copyfile(R_Src_Path,R_Dst_Path,follow_symlinks=True)
@@ -241,7 +241,7 @@ class MMTests:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"mmtests测试出错.List-BinarySearch构建失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"mmtests测试出错.List-BinarySearch构建失败,报错信息:{decode_output(e.stderr)}")
 
 
 
@@ -264,7 +264,7 @@ class MMTests:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"mmtests测试出错.File-Slurp构建失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"mmtests测试出错.File-Slurp构建失败,报错信息:{decode_output(e.stderr)}")
 
 
     # 准备mmtests
@@ -276,14 +276,14 @@ class MMTests:
             shutil.rmtree(self.path, ignore_errors=True)
             try:
                 subprocess.run(
-                    "git clone https://github.com/gormanm/mmtests.git",
+                    "GIT_TERMINAL_PROMPT=0 git clone https://github.com/gormanm/mmtests.git",
                     cwd="/root/osmts_tmp/",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://github.com/gormanm/mmtests.git'.stderr.decode('utf-8'))
+                raise GitCloneError(e.returncode,'https://github.com/gormanm/mmtests.git',decode_output(e.stderr))
 
 
 
@@ -295,9 +295,15 @@ class MMTests:
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             #pool.submit(self.prepare_R)
-            pool.submit(self.prepare_L)
-            pool.submit(self.prepare_F)
-            pool.submit(self.prepare_M)
+            futures = [
+                pool.submit(self.prepare_L),
+                pool.submit(self.prepare_F),
+                pool.submit(self.prepare_M),
+            ]
+            # 必须取回结果:否则 prepare_* 抛出的异常会被 future 吞掉,
+            # 表现为"准备阶段静默失败",随后所有 config 集体失败且看不到真实原因
+            for future in futures:
+                future.result()
 
 
     def mmtests_each_test(self,config):

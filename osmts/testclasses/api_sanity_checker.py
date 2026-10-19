@@ -3,7 +3,8 @@ import subprocess
 import os
 from pathlib import Path
 
-from .errors import DefaultError, GitCloneError
+from .errors import DefaultError, GitCloneError, RunError
+from .utils import decode_output
 
 
 class APISanityChecker:
@@ -39,9 +40,9 @@ class APISanityChecker:
             stderr=subprocess.PIPE,
         )
         if gcc_target.returncode != 0:
-            raise DefaultError(f"api-sanity-checker测试出错.获取gcc目标架构失败,报错信息:{gcc_target.stderr.decode('utf-8')}")
+            raise DefaultError(f"api-sanity-checker测试出错.获取gcc目标架构失败,报错信息:{decode_output(gcc_target.stderr)}")
 
-        self.gcc_target = gcc_target.stdout.decode('utf-8', errors='replace').strip()
+        self.gcc_target = decode_output(gcc_target.stdout).strip()
         if not self.gcc_target:
             raise DefaultError("api-sanity-checker测试出错.gcc -dumpmachine未返回有效的目标架构")
 
@@ -76,14 +77,14 @@ class APISanityChecker:
             shutil.rmtree(self.abi_compliance_checker,ignore_errors=True)
             try:
                 subprocess.run(
-                    "git clone https://gitcode.com/gh_mirrors/ab/abi-compliance-checker.git",
+                    "GIT_TERMINAL_PROMPT=0 git clone https://gitcode.com/gh_mirrors/ab/abi-compliance-checker.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitcode.com/gh_mirrors/ab/abi-compliance-checker.git',e.stderr.decode())
+                raise GitCloneError(e.returncode,'https://gitcode.com/gh_mirrors/ab/abi-compliance-checker.git',decode_output(e.stderr))
 
 
         if self.api_sanity_checker.exists() and self.believe_tmp:
@@ -92,14 +93,14 @@ class APISanityChecker:
             shutil.rmtree(self.api_sanity_checker,ignore_errors=True)
             try:
                 subprocess.run(
-                    "cd /root/osmts_tmp && git clone https://github.com/lvc/api-sanity-checker.git",
+                    "cd /root/osmts_tmp && GIT_TERMINAL_PROMPT=0 git clone https://github.com/lvc/api-sanity-checker.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://github.com/lvc/api-sanity-checker.git',e.stderr.decode())
+                raise GitCloneError(e.returncode,'https://github.com/lvc/api-sanity-checker.git',decode_output(e.stderr))
 
         # 开始安装
         subprocess.run(
@@ -121,7 +122,7 @@ class APISanityChecker:
             stderr=subprocess.PIPE,
         )
         if test.returncode != 0:
-            print(f"api-snity-checcker测试出错.api-sanity-checker -test验证命令失败,报错信息:{test.stderr.decode('utf-8')}")
+            print(f"api-snity-checcker测试出错.api-sanity-checker -test验证命令失败,报错信息:{decode_output(test.stderr)}")
             print('osmts继续运行')
 
         # 生成GCC_VERSION.xml
@@ -135,19 +136,33 @@ class APISanityChecker:
 
     def run_test(self):
         osmts_dir = os.getcwd()
-        os.chdir(self.directory)
-        checker = subprocess.run(
-            f"api-sanity-checker -lib NAME -d GCC_VERSION.xml -gen -build -run",
-            shell=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        if checker.returncode != 0:
-            print(f"api-snity-checcker测试出错.测试命令运行失败,报错信息:{checker.stderr.decode('utf-8')}")
-            return
-        # test_results/NAME/12/test_results.html
-        shutil.copy2(f"test_results/NAME/{self.version}/test_results.html",self.directory)
-        os.chdir(osmts_dir)
+        try:
+            os.chdir(self.directory)
+            checker = subprocess.run(
+                f"api-sanity-checker -lib NAME -d GCC_VERSION.xml -gen -build -run",
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            # test_results/NAME/12/test_results.html
+            html = Path(f"test_results/NAME/{self.version}/test_results.html")
+            if checker.returncode != 0:
+                # 退出码语义未经验证:若产物已生成则不判失败(避免误报),
+                # 只有"返回码非0且没有产物"才算真正的失败
+                if html.exists():
+                    print(f"警告:api-sanity-checker返回码为{checker.returncode},"
+                          f"但已生成{html},按成功处理")
+                else:
+                    raise RunError(
+                        checker.returncode,
+                        f"api-sanity-checker命令运行失败(未生成产物{html})."
+                        f"报错信息:{decode_output(checker.stderr)}",
+                    )
+            shutil.copy2(html, self.directory)
+        finally:
+            # 必须无条件复原 CWD:原先失败分支 return 跳过了复原,
+            # 进程工作目录会永久停留在结果目录,污染后续所有测试
+            os.chdir(osmts_dir)
 
 
     def run(self):

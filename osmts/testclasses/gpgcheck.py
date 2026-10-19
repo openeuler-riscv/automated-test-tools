@@ -9,6 +9,7 @@ from tqdm import tqdm
 from tqdm.asyncio import tqdm as tqdm_asyncio
 
 from .errors import DefaultError
+from .utils import decode_output
 
 
 class GpgCheck:
@@ -111,7 +112,7 @@ class GpgCheck:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"gpgcheck测试出错.import gpg文件失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"gpgcheck测试出错.import gpg文件失败,报错信息:{decode_output(e.stderr)}")
 
 
         # 获取已安装的所有rpm包名
@@ -123,7 +124,7 @@ class GpgCheck:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"gpgcheck测试出错.获取所有已安装的rpm包名失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"gpgcheck测试出错.获取所有已安装的rpm包名失败,报错信息:{decode_output(e.stderr)}")
         else:
             self.rpm_package_list = dnf_list.stdout.decode('utf-8').splitlines()
 

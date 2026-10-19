@@ -3,8 +3,13 @@ import subprocess, fileinput, shutil, re, os
 from pathlib import Path
 from openpyxl import Workbook
 from .errors import GitCloneError, CompileError, RunError, SummaryError
+from .utils import decode_output
 
 class Unixbench:
+    # 编译后必须存在的核心测试程序(位于 UnixBench/pgms/ 下),
+    # 用于"make返回码非0但产物可用"的双重判定
+    CORE_PROGRAMS = ('dhry2', 'fstime', 'pipe', 'syscall', 'spawn', 'dhry2reg')
+
     def __init__(self, **kwargs):
         self.rpms = {'perl', 'perl-CPAN'}
         self.believe_tmp: bool = kwargs.get('believe_tmp')
@@ -23,7 +28,7 @@ class Unixbench:
             shutil.rmtree(self.path, ignore_errors=True)
             try:
                 subprocess.run(
-                    args="git clone https://gitee.com/zhtianyu/byte-unixbench.git",
+                    args="GIT_TERMINAL_PROMPT=0 git clone https://gitee.com/zhtianyu/byte-unixbench.git",
                     cwd="/root/osmts_tmp",
                     shell=True, check=True,
                     stdout=subprocess.DEVNULL,
@@ -42,12 +47,20 @@ class Unixbench:
             subprocess.run(
                 "make",
                 cwd="/root/osmts_tmp/byte-unixbench/UnixBench",
-                shell=True,
+                shell=True,check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise CompileError(e.returncode, self.compiler, e.stderr)
+            # 双重判定:Run 与 pgms/*.sh 是仓库自带的,真正的编译产物在
+            # UnixBench/pgms/ 下。返回码非0只说明"有目标没构建成功",
+            # 若核心二进制都在,则按可继续处理(避免部分可选程序失败误判整轮失败)
+            missing = [name for name in self.CORE_PROGRAMS
+                       if not (self.path / 'UnixBench' / 'pgms' / name).exists()]
+            if missing:
+                raise CompileError(e.returncode, self.compiler, decode_output(e.stderr))
+            print(f"警告:make返回码为{e.returncode},但核心测试程序均已构建,继续运行"
+                  f"(若结果异常请检查UnixBench/pgms/目录)")
 
     def run_test(self, times=3):
         for i in range(1, times + 1):
@@ -55,17 +68,17 @@ class Unixbench:
                 run = subprocess.run(
                     "./Run -c 1 -c $(nproc)",
                     cwd="/root/osmts_tmp/byte-unixbench/UnixBench/",
-                    shell=True,
+                    shell=True,check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
             except subprocess.CalledProcessError as e:
-                raise RunError(e.returncode, e.stderr)
+                raise RunError(e.returncode, decode_output(e.stderr))
             else:
-                result = run.stdout.decode('utf-8')
+                result = decode_output(run.stdout)
                 self.test_results.append(result)
                 log_path = self.directory / f'unixbench_{i}.log'
-                with open(log_path, 'w') as file:
+                with open(log_path, 'w', encoding='utf-8') as file:
                     file.write(result)
 
     def result2summary(self):
@@ -128,7 +141,11 @@ class Unixbench:
                     raw_data_1p[i].append(float(matches[0]))
                     raw_data_np[i].append(float(matches[1]))
                 else:
-                    raise SummaryError(f"Missing match for {test_items[i]}")
+                    # SummaryError 的参数语义是 fileName,不能把报错文案当文件名传,
+                    # 否则 main.py 会打印"详细报错信息请查看文件:Missing match for ..."
+                    raise SummaryError(self._write_summary_error_log(
+                        f"未能在./Run输出中匹配到测试项:{test_items[i]}"
+                    ))
 
         for i in range(13):
             if raw_data_1p[i]:
@@ -146,7 +163,9 @@ class Unixbench:
                     index_scores_1p[i].append(float(scores[i]))
                     index_scores_np[i].append(float(scores[i + 13]))
             else:
-                raise SummaryError("Index score count is insufficient")
+                raise SummaryError(self._write_summary_error_log(
+                    f"Index分数不足:需要至少26个,实际拿到{len(scores)}个"
+                ))
 
         for row in range(13):
             if index_scores_1p[row]:
@@ -156,15 +175,31 @@ class Unixbench:
 
         wb.save(self.directory / 'unixbench.xlsx')
 
+    def _write_summary_error_log(self, reason:str) -> Path:
+        """把汇总失败的原因连同原始输出落盘,返回日志文件路径。
+
+        SummaryError 只接受 fileName,所以失败原因必须写进文件,
+        由 main.py 统一提示"详细报错信息请查看文件:<该路径>"。
+        """
+        log_file = self.directory / 'unixbench_summary_error.log'
+        if not self.directory.exists():
+            self.directory.mkdir(parents=True, exist_ok=True)
+        with open(log_file, 'w', encoding='utf-8') as log:
+            log.write(f"{reason}\n\n")
+            log.write(f"共收集到{len(self.test_results)}轮./Run输出,原文如下:\n")
+            for index, content in enumerate(self.test_results, start=1):
+                log.write(f"\n===== 第{index}轮 =====\n{content}\n")
+        return log_file
+
     def run(self):
         print("开始进行unixbench测试")
         self.pre_test()
         self.run_test(times=3)
         try:
             self.result2summary()
+        except SummaryError:
+            # result2summary 内部已把原因写入日志并带上文件路径,直接上抛
+            raise
         except Exception as e:
-            logFile = self.directory / 'unixbench_summary_error.log'
-            with open(logFile, 'w') as log:
-                log.write(str(e))
-            raise SummaryError(logFile)
+            raise SummaryError(self._write_summary_error_log(f"汇总unixbench结果时出错:{e}"))
         print("unixbench测试结束")

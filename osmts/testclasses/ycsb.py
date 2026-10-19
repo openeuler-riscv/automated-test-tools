@@ -7,6 +7,7 @@ import re,time,shlex
 import subprocess,shutil
 
 from .errors import DefaultError,GitCloneError,RunError,SummaryError
+from .utils import decode_output
 
 
 
@@ -234,10 +235,10 @@ class YCSB: # Yahoo！Cloud Serving Benchmark
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"{error_msg},报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"{error_msg},报错信息:{decode_output(e.stderr)}")
 
         output = result.stdout.decode('utf-8')
-        stderr_text = result.stderr.decode('utf-8')
+        stderr_text = decode_output(result.stderr)
         if stderr_text:
             output += f"\n[stderr]\n{stderr_text}"
 
@@ -268,14 +269,14 @@ class YCSB: # Yahoo！Cloud Serving Benchmark
             shutil.rmtree(self.path,ignore_errors=True)
             try:
                 subprocess.run(
-                    "git clone https://gitee.com/zhtianyu/ycsb.git",
+                    "GIT_TERMINAL_PROMPT=0 git clone https://gitee.com/zhtianyu/ycsb.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/ycsb.git',e.stderr.decode('utf-8'))
+                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/ycsb.git',decode_output(e.stderr))
         try:
             subprocess.run(
                 "mvn -pl site.ycsb:redis-binding -am clean package",
@@ -285,7 +286,7 @@ class YCSB: # Yahoo！Cloud Serving Benchmark
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"mvn命令运行失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"mvn命令运行失败,报错信息:{decode_output(e.stderr)}")
 
 
         # 修改配置文件加入redis，重复运行时也避免配置项不断追加
