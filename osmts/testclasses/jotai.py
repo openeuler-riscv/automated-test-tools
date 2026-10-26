@@ -6,6 +6,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from .errors import GitCloneError,RunError,DefaultError
+from .utils import decode_output
 
 
 class Jotai:
@@ -55,14 +56,14 @@ class Jotai:
             # 拉取jotai-benchmarks源码
             try:
                 subprocess.run(
-                    "git clone https://gitcode.com/qq_61653333/jotai-benchmarks.git",
+                    "GIT_TERMINAL_PROMPT=0 git clone https://gitcode.com/qq_61653333/jotai-benchmarks.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitcode.com/qq_61653333/jotai-benchmarks.git',e.stderr.decode())
+                raise GitCloneError(e.returncode,'https://gitcode.com/qq_61653333/jotai-benchmarks.git',decode_output(e.stderr))
 
 
         # 创建anghaLeaves系列目录
@@ -99,7 +100,7 @@ class Jotai:
                 self.anghaLeaves_failed += 1
                 self.ws_anghaLeaves.append([source_file, 'compile failed',log_file])
             with open(log_file,'w') as log:
-                log.write(compile.stdout.decode('utf-8'))
+                log.write(decode_output(compile.stdout))
             return # 编译失败就不再往下运行了
 
         # 运行
@@ -114,7 +115,7 @@ class Jotai:
                 self.anghaLeaves_failed += 1
                 self.ws_anghaLeaves.append([source_file, 'run failed',log_file])
             with open(log_file,'w') as log:
-                log.write(compile.stdout.decode('utf-8') + '\n' + run.stdout.decode('utf-8'))
+                log.write(decode_output(compile.stdout) + '\n' + decode_output(run.stdout))
         else:
             with self.anghaLeaves_lock:
                 self.anghaLeaves_passed += 1
@@ -135,7 +136,7 @@ class Jotai:
                 self.anghaMath_failed += 1
                 self.ws_anghaMath.append([source_file, 'compile failed',log_file])
             with open(log_file,'w') as log:
-                log.write(compile.stdout.decode('utf-8'))
+                log.write(decode_output(compile.stdout))
             return
 
         run = subprocess.run(
@@ -149,7 +150,7 @@ class Jotai:
                 self.anghaMath_failed += 1
                 self.ws_anghaMath.append([source_file, 'run failed', log_file])
             with open(log_file, 'w') as log:
-                log.write(compile.stdout.decode('utf-8') + '\n' + run.stdout.decode('utf-8'))
+                log.write(decode_output(compile.stdout) + '\n' + decode_output(run.stdout))
         else:
             with self.anghaMath_lock:
                 self.anghaMath_passed += 1
@@ -159,8 +160,10 @@ class Jotai:
         anghaLeaves_source_files = list(os.walk(self.anghaLeaves))[0][2]
         anghaMath_source_files = list(os.walk(self.anghaMath))[0][2]
         with ThreadPoolExecutor() as pool:
-            pool.map(self.compile_and_run_anghaLeaves, anghaLeaves_source_files)
-            pool.map(self.compile_and_run_anghaMath, anghaMath_source_files)
+            # pool.map 返回的迭代器必须消费掉:否则 worker 抛出的异常会被
+            # future 吞掉,测试"静默成功"并输出 0/0 统计
+            list(pool.map(self.compile_and_run_anghaLeaves, anghaLeaves_source_files))
+            list(pool.map(self.compile_and_run_anghaMath, anghaMath_source_files))
 
         self.ws_anghaLeaves.append([f'passwd数量:{self.anghaLeaves_passed}',f'failed数量:{self.anghaLeaves_failed}'])
         self.ws_anghaMath.append([f'passwd数量:{self.anghaMath_passed}',f'failed数量:{self.anghaMath_failed}'])

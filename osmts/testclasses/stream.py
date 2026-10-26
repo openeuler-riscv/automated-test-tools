@@ -2,6 +2,7 @@ from pathlib import Path
 import re,subprocess,shutil
 from openpyxl import Workbook
 from .errors import GitCloneError,CompileError,SummaryError,RunError
+from .utils import decode_output
 
 
 
@@ -26,7 +27,7 @@ class Stream:
             shutil.rmtree(self.path, ignore_errors=True)
             try:
                 subprocess.run(
-                    "git clone https://gitee.com/April_Zhao/stream.git",
+                    "GIT_TERMINAL_PROMPT=0 git clone https://gitee.com/April_Zhao/stream.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
@@ -36,7 +37,7 @@ class Stream:
                 raise GitCloneError(
                     error_code = e.returncode,
                     url = 'https://gitee.com/April_Zhao/stream.git',
-                    stderr = e.stderr.decode('utf-8'),
+                    stderr = decode_output(e.stderr),
                 )
 
 
@@ -53,7 +54,7 @@ class Stream:
             raise CompileError(
                 error_code = e.returncode,
                 compiler = self.compiler,
-                stderr = e.stderr.decode('utf-8')
+                stderr = decode_output(e.stderr)
             )
 
 

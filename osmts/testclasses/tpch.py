@@ -13,6 +13,7 @@ import subprocess,shutil
 from tqdm import trange,tqdm
 
 from .errors import DefaultError,SummaryError
+from .utils import decode_output
 
 
 class TPC_H:
@@ -172,7 +173,8 @@ class TPC_H:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"TPC-H测试出错.构建或运行dbgen失败,报错信息:{e.stdout.decode('utf-8')}")
+            # stdout=DEVNULL 而 stderr=PIPE,原代码读 e.stdout(恒为 None)且字段用错
+            raise DefaultError(f"TPC-H测试出错.构建或运行dbgen失败,报错信息:{decode_output(e.stderr)}")
 
         try:
             subprocess.run(
@@ -184,7 +186,7 @@ class TPC_H:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"TPC-H测试出错.生成saveSQL失败,报错信息:{e.stdout.decode('utf-8')}")
+            raise DefaultError(f"TPC-H测试出错.生成saveSQL失败,报错信息:{decode_output(e.stderr)}")
 
         self._patch_mysql_query_files()
 

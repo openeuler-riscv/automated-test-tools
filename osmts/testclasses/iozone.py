@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess,shutil
 
 from .errors import DefaultError, CompileError, RunError
+from .utils import decode_output
 
 
 class Iozone:
@@ -33,7 +34,7 @@ class Iozone:
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"iozone测试出错:下载/解压iozone源码压缩包失败.报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"iozone测试出错:下载/解压iozone源码压缩包失败.报错信息:{decode_output(e.stderr)}")
 
 
         #编译iozone
@@ -46,7 +47,7 @@ class Iozone:
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise CompileError(e.returncode,self.compiler,e.stderr.decode('utf-8'))
+            raise CompileError(e.returncode,self.compiler,decode_output(e.stderr))
 
 
     def run_test(self):
@@ -59,7 +60,7 @@ class Iozone:
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,e.stderr.decode('utf-8'))
+            raise RunError(e.returncode,decode_output(e.stderr))
 
 
     def run(self):

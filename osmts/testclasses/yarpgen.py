@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
-import sys,subprocess,shutil
+import subprocess,shutil
 from openpyxl import Workbook
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
 from .errors import GitCloneError,DefaultError
+from .utils import decode_output
 
 
 class Yarpgen:
@@ -32,14 +33,14 @@ class Yarpgen:
             shutil.rmtree(self.path,ignore_errors=True)
             try:
                 subprocess.run(
-                    "git clone https://gitee.com/zhtianyu/yarpgen.git",
+                    "GIT_TERMINAL_PROMPT=0 git clone https://gitee.com/zhtianyu/yarpgen.git",
                     cwd="/root/osmts_tmp",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
             except subprocess.CalledProcessError as e:
-                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/yarpgen.git',e.stderr.decode('utf-8'))
+                raise GitCloneError(e.returncode,'https://gitee.com/zhtianyu/yarpgen.git',decode_output(e.stderr))
 
         if self.testdir.exists():
             shutil.rmtree(self.testdir)
@@ -55,7 +56,7 @@ class Yarpgen:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"yarpgen测试出错.cmake和make失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"yarpgen测试出错.cmake和make失败,报错信息:{decode_output(e.stderr)}")
 
 
     def create_source_code_and_run(self,id) -> dict:
@@ -70,8 +71,11 @@ class Yarpgen:
             stderr=subprocess.PIPE,
         )
         if create_source_code.returncode != 0:
-            print(f"yarpgen测试{id}出错.创建随机c++源代码文件失败,报错信息:{create_source_code.stderr.decode('utf-8')}")
-            sys.exit(1)
+            # 不能用 sys.exit:SystemExit 不被 main.py 捕获,会终止整个osmts运行
+            raise DefaultError(
+                f"yarpgen测试{id}出错.创建随机c++源代码文件失败,返回值:{create_source_code.returncode}."
+                f"报错信息:{decode_output(create_source_code.stderr)}"
+            )
 
         # 编译c++代码
         compile = subprocess.run(
@@ -84,8 +88,8 @@ class Yarpgen:
         )
         if compile.returncode != 0:
             print(f"yarpgen测试{id}出错.编译c++源代码失败,具体报错信息请前往{directory}/error.log查看")
-            with open(directory / 'error.log', 'w') as log:
-                log.write(compile.stderr.decode('utf-8'))
+            with open(directory / 'error.log', 'w', encoding='utf-8') as log:
+                log.write(decode_output(compile.stderr))
             return {
                 "id": id,
                 "success": False,
@@ -93,18 +97,28 @@ class Yarpgen:
             }
 
         # 执行并判断
-        O1_result = subprocess.run(
+        O1_run = subprocess.run(
             f"{directory}/g++_O0.out",
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-        ).stdout.decode('utf-8')
-        O3_result = subprocess.run(
+        )
+        O3_run = subprocess.run(
             f"{directory}/g++_O3.out",
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-        ).stdout.decode('utf-8')
+        )
+        # 必须先看返回码:只比 stdout 的话,两个二进制都异常退出且无输出时
+        # '' == '' 会被误判为"通过"
+        if O1_run.returncode != 0 or O3_run.returncode != 0:
+            return {
+                "id": id,
+                "success": False,
+                "reason": f"执行异常退出(O0返回码{O1_run.returncode},O3返回码{O3_run.returncode})",
+            }
+        O1_result = decode_output(O1_run.stdout)
+        O3_result = decode_output(O3_run.stdout)
         return {
             "id":id,
             "success":(O1_result == O3_result),

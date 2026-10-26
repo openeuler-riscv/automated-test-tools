@@ -59,33 +59,23 @@ csmith_count = 1000
 yarpgen_count = 100
 gcc_version="auto"
 believe_tmp = 0
-compare = 0
-os_version = "24.03-sp3"
-compare_version = "24.03-sp2"
-compare_path = ""
-compare_device = ["sg2042"]
 ```
 
-1. run_tests 是一个列表，里面是需要测试的项目;
-2. run_tests 里的值可以是开发进度里的任意个项目，如果出现 'performance-test' 则自动添加 "fio", "stream", "iozone", "unixbench", "libmicro", "nmap", "lmbench", "netperf";
-3. 如果 run_tests=["ALL"]，则添加所有测试项目进去;
-3. saved_directory 填写测试结果存放的目录，main.py 运行结束后会在这个目录产生 excel 文件，默认为 '/root/osmts_result';
-4. compiler 是待测试的编译环境，应当填写 gcc 或者 clang, 默认是 gcc;
-5. netperf_server_ip 是 netserver 运行的机器的 ip 地址，如果不测试 netperf 则无需填写，netserver 机器可以是自己，这时候就填写127.0.0.1; 指定机器上提前运行 netserver -p 10000; 如果指定了 netperf_server_password 则会尝试打开对方机器上的 netserver;
-6. sha256sumISO 是 ISO 镜像哈希校验的 ISO 下载地址
-6. csmith_count 是 csmith 测试生成和编译随机 c 文件的数量，取值范围[100,5000]，默认为 1000;
-7. yarpgen_count 是 yarpgen 测试生成随机 c++ 文件的数量，取值范围[10,1000]，默认为 100;
-8. gcc_version 是 api_sanity_checker 测试需要用到的当前系统安装的 gcc 的版本，可以查看 /usr/lib/gcc/riscv64-openEuler-linux/ 目录下的子目录，是一个数字比如 12，如果不想指定可以填入 auto 让 osmts 自动查询;
-9. believe_tmp=1 表示尽可能使用本地已下载好的资源而不是从远程获取，调试用;
-10. compare 表示是否进行性能结果对比，0 为不对比，1 为对比;
-11. os_version 表示当前系统版本;
-12. compare_version 表示与哪一个系统版本进行对比；
-13. compare_path 表示对比的结果路径，如 "/root/oerv-qa/testreport/24.03sp2/performance-test"；
-14. compare_device 表示对比的硬件类型，如 lpi4a 或 sg2042
+1. run_tests是一个列表，里面是需要测试的项目;
+2. run_tests里的值可以是开发进度里的任意个项目,如果出现'performance-test'则自动添加"fio", "stream", "iozone", "unixbench", "libmicro", "nmap", "lmbench", "netperf";
+3. 如果run_tests=["ALL"],则添加所有测试项目进去;
+3. saved_directory填写测试结果存放的目录，main.py运行结束后会在这个目录产生excel文件，默认为'/root/osmts_result';
+4. compiler是待测试的编译环境，应当填写gcc或者clang ,默认是gcc;
+5. netperf_server_ip是netserver运行的机器的ip地址，如果不测试netperf则无需填写，netserver机器可以是自己，这时候就填写127.0.0.1;指定机器上提前运行netserver -p 10000;如果指定了netperf_server_password则会尝试打开对方机器上的netserver;
+6. sha256sumISO是ISO镜像哈希校验的ISO下载地址
+6. csmith_count是csmith测试生成和编译随机c文件的数量,取值范围[100,5000],默认为1000;
+7. yarpgen_count是yarpgen测试生成随机c++文件的数量,取值范围[10,1000],默认为100;
+8. gcc_version是api_sanity_checker测试需要用到的当前系统安装的gcc的版本,可以查看`/usr/lib/gcc/$(gcc -dumpmachine)/`目录下的子目录,是一个数字比如12,如果不想指定可以填入auto让osmts自动查询;
+9. believe_tmp=1表示尽可能使用本地已下载好的资源而不是从远程获取,调试用.
 
 
 
-有的测试项目会运行很长一段时间，把 main.py 一直挂着就好，推荐在 screen/tmux 这样的终端复用器里运行，防止意外终止运行。
+有的测试项目会运行很长一段时间，把main.py一直挂着就好，推荐在screen/tmux这样的终端复用器里运行，防止意外终止运行。
 
 ---
 
@@ -109,33 +99,45 @@ compare_device = ["sg2042"]
 | 14 | ltp_posix          | 完成   |
 | 15 | gpgcheck           | 完成   |
 | 16 | dejagnu            | 完成   |
-| 17 | yarpgen            | 完成   |
-| 18 | llvmcase           | 完成   |
-| 19 | anghabench         | 完成   |
-| 20 | csmith             | 完成   |
-| 21 | jotai              | 完成   |
-| 22 | jtreg              | 完成   |
-| 23 | openscap           | 完成   |
-| 24 | secureguardian     | 完成   |
-| 25 | mmtests            | 完成   |
-| 26 | api-sanity-checker | 完成   |
-| 27 | ycsb               | 完成   |
-| 28 | redis_benchmark    | 完成   |
-| 29 | sysbench           | 完成   |
-| 30 | benchmarksql       | 完成   |
-| 31 | tpch               | 完成   |
-| 32 | sha256sum          | 完成   |
+| 17 | dejagnu_gcc        | 完成   |
+| 18 | dejagnu_g++        | 完成   |
+| 19 | dejagnu_gfortran   | 完成   |
+| 20 | yarpgen            | 完成   |
+| 21 | llvmcase           | 完成   |
+| 22 | anghabench         | 完成   |
+| 23 | csmith             | 完成   |
+| 24 | jotai              | 完成   |
+| 25 | jtreg              | 完成   |
+| 26 | jtreg_8            | 完成   |
+| 27 | jtreg_11           | 完成   |
+| 28 | jtreg_17           | 完成   |
+| 29 | jtreg_21           | 完成   |
+| 30 | openscap           | 完成   |
+| 31 | secureguardian     | 完成   |
+| 32 | mmtests            | 完成   |
+| 33 | api-sanity-checker | 完成   |
+| 34 | ycsb               | 完成   |
+| 35 | redis_benchmark    | 完成   |
+| 36 | sysbench           | 完成   |
+| 37 | benchmarksql       | 完成   |
+| 38 | tpch               | 完成   |
+| 39 | sha256sum          | 完成   |
 
 
 ## 注意事项
-1. 进行ltp测试期间机器可能因为 kernel panic 导致 ssh 连不上，可以连上串口查看是否kernel panic.
-2. ltp_cve 实际上已经被包含在了 ltp 里，在 ltp 存在的情况下可以不测试 ltp_cve.
-3. ltp_stress 测试执行时接收 SIGINT 会清理子进程.
-4. 若待测机器的/分区剩余容量过小，osmts 会报错，避免因 fio 等下载文件导致文件系统崩溃.
-5. gpgchec k测试中会下载大量的 rpm 包，为加快速度，可以修改/etc/dnf/dnf.conf，添加一行 max_parallel_downloads=20，并行下载 rpm 包，但这个数字不要太大否则会报 Error: Bad value of LRO_MAXPARALLELDOWNLOADS 错误;
-6. 部分测试用到了 asyncio 协程，从目前的结果来看不建议使用 uvloop 调度器;
-7. 如果进行 mysql 或 postgresql 数据库的测试，把数据库的登陆密码设置为无密码或者 123456，osmts 运行后数据库密码会设置为 123456;
-8. osmts 使用时必须带有 dbus，Python 版本应为 3.9 以上，机器在测试期间不要作其他用途.
+1. 进行ltp测试期间机器可能会ssh连不上,在sg2042上这很正常,机器并没有崩溃,耐心等待几天不要重启机器,否则丢失运行结果.如果对机器状态有疑惑可以连上串口查看是否kernel panic.
+2. ltp_cve实际上已经被包含在了ltp里,在ltp存在的情况下可以不测试ltp_cve.
+3. ltp_stress测试执行时接收SIGINT会清理子进程.
+4. 若待测机器的/分区剩余容量过小,osmts会报错,避免因fio下载文件导致文件系统崩溃.
+5. gpgcheck测试中会下载大量的rpm包,为加快速度,需要修改/etc/dnf/dnf.conf,添加一行max_parallel_downloads=20,并行下载rpm包,但这个数字不要太大否则会报Error: Bad value of LRO_MAXPARALLELDOWNLOADS错误;
+6. 部分测试用到了asyncio协程,从目前的结果来看不建议使用uvloop调度器;
+7. 如果进行mysql或postresql数据库的测试,把数据库的登陆密码设置为无密码或者123456,osmts运行后数据库密码会设置为123456;
+8. osmts使用时必须带有dbus,Python版本应为3.11以上(代码使用tomllib,3.9/3.10无法启动),机器在测试期间不要作其他用途.
+9. dejagnu与jtreg可按工具/版本拆分运行(dejagnu_gcc、dejagnu_g++、dejagnu_gfortran、jtreg_8、jtreg_11、jtreg_17、jtreg_21),但不要与dejagnu/jtreg同时配置,否则同一目标会跑两遍.这几项耗时很长,dejagnu的gcc套件有约6万个测试文件.
+10. 各JDK需要不同版本的jtreg(8用4.2、11用7.3.1、17用7.5.2、21用8.2.1,代码自动选择),并且需要JAVA_HOME指向含javac的JDK,osmts会自动探测并设置.
+11. llvmcase按/proc/cpuinfo的isa字段判断RVA20还是RVA23(看是否含向量扩展v),RVA23会加-DLLVM_RISCV_DEFAULT_EXTENSIONS.
+12. llvmcase的构建并行度按可用内存推算(单个编译进程约1.4GB),避免在内存小的机器上被OOM杀掉;构建日志在saved_directory/llvmcase/llvm_build.log.
+13. anghabench改为下载归档(169MB,支持续传)而不是git clone: 原仓库有104万个文件,完整克隆要465MB,容易超时.
 
 ---
 ## 未来计划

@@ -3,6 +3,7 @@ import re,subprocess,psutil
 from openpyxl import Workbook
 import paramiko
 from .errors import DefaultError,RunError
+from .utils import decode_output
 
 
 def get_client(ip, password, port=22):
@@ -47,6 +48,19 @@ class Netperf(object):
         self.is_active = stdout.read().decode().strip()
         if self.is_active == "active":
             stdin, stdout, stderr = self.client.exec_command("systemctl stop firewalld")
+
+        # 非firewalld的静态iptables/nftables规则也可能拦截netperf端口,检查并放行(已存在则跳过)
+        # 放行控制端口10000(TCP),以及数据连接使用的临时端口范围(TCP/UDP都需要)
+        stdin, stdout, stderr = self.client.exec_command(
+            "iptables -C INPUT -p tcp --dport 10000 -j ACCEPT 2>/dev/null "
+            "|| iptables -I INPUT -p tcp --dport 10000 -j ACCEPT 2>/dev/null; "
+            "iptables -C INPUT -p tcp --dport 1024:65535 -j ACCEPT 2>/dev/null "
+            "|| iptables -I INPUT -p tcp --dport 1024:65535 -j ACCEPT 2>/dev/null; "
+            "iptables -C INPUT -p udp --dport 1024:65535 -j ACCEPT 2>/dev/null "
+            "|| iptables -I INPUT -p udp --dport 1024:65535 -j ACCEPT 2>/dev/null"
+        )
+        if stdout.channel.recv_exit_status() != 0:
+            print("警告:在远程机器上放行netperf端口失败,请检查服务器的iptables/nftables规则")
         print(f"Server IP: '{self.server_ip}'")
 
 
@@ -107,8 +121,9 @@ class Netperf(object):
                     stderr=subprocess.PIPE
                 )
             except subprocess.CalledProcessError as e:
-                raise RunError(e.returncode,f"netperf测试出错:TCP_STREAM测试运行失败.报错信息:{e.stderr}")
-            result = re.findall(r'\d+\.\d+|\d+', TCP_STREAM.stdout.decode('utf-8').split('\n')[6])
+                # netperf 的错误信息打印在 stdout,必须一起带上,否则报错信息是空的
+                raise RunError(e.returncode,f"netperf测试出错:TCP_STREAM测试运行失败.报错信息:{decode_output(e.stdout)} {decode_output(e.stderr)}")
+            result = re.findall(r'\d+\.\d+|\d+', decode_output(TCP_STREAM.stdout).split('\n')[6])
             for col,value in enumerate(result):
                 ws.cell(line,col+2,value)
             line += 1
@@ -125,9 +140,9 @@ class Netperf(object):
                     stderr=subprocess.PIPE
                 )
             except subprocess.CalledProcessError as e:
-                raise RunError(e.returncode,f"netperf测试出错:UDP_STREAM测试运行失败.报错信息:{e.stderr.decode('utf-8')}")
-            result1 = re.findall(r'\d+\.\d+|\d+', UDP_STREAM.stdout.decode('utf-8').split('\n')[5])
-            result2 = re.findall(r'\d+\.\d+|\d+', UDP_STREAM.stdout.decode('utf-8').split('\n')[6])
+                raise RunError(e.returncode,f"netperf测试出错:UDP_STREAM测试运行失败.报错信息:{decode_output(e.stdout)} {decode_output(e.stderr)}")
+            result1 = re.findall(r'\d+\.\d+|\d+', decode_output(UDP_STREAM.stdout).split('\n')[5])
+            result2 = re.findall(r'\d+\.\d+|\d+', decode_output(UDP_STREAM.stdout).split('\n')[6])
             for col,value in enumerate(result1):
                 ws.cell(line,col+2,value)
             line += 1
@@ -147,7 +162,8 @@ class Netperf(object):
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,f"netperf测试出错:TCP_RR测试运行失败.报错信息:{e.stderr.decode('utf-8')}")
+            raise RunError(e.returncode,f"netperf测试出错:TCP_RR测试运行失败.报错信息:{decode_output(e.stdout)} {decode_output(e.stderr)}")
+        # 结果数据:坏字节应让测试响亮失败,不要静默替换(其余报错路径已用 decode_output)
         result1 = re.findall(r'\d+\.\d+|\d+', TCP_RR.stdout.decode('utf-8').split('\n')[6])
         result2 = re.findall(r'\d+\.\d+|\d+', TCP_RR.stdout.decode('utf-8').split('\n')[7])
         for col, value in enumerate(result1):
@@ -165,9 +181,9 @@ class Netperf(object):
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,f"netperf测试出错:TCP_CRR测试运行失败.报错信息:{e.stderr.decode('utf-8')}")
-        result1 = re.findall(r'\d+\.\d+|\d+', TCP_CRR.stdout.decode('utf-8').split('\n')[6])
-        result2 = re.findall(r'\d+\.\d+|\d+', TCP_CRR.stdout.decode('utf-8').split('\n')[7])
+            raise RunError(e.returncode,f"netperf测试出错:TCP_CRR测试运行失败.报错信息:{decode_output(e.stdout)} {decode_output(e.stderr)}")
+        result1 = re.findall(r'\d+\.\d+|\d+', decode_output(TCP_CRR.stdout).split('\n')[6])
+        result2 = re.findall(r'\d+\.\d+|\d+', decode_output(TCP_CRR.stdout).split('\n')[7])
         for col, value in enumerate(result1):
             ws.cell(22, col + 2, value)
         ws.cell(23, 2, result2[0])
@@ -183,9 +199,9 @@ class Netperf(object):
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,f"netperf测试出错:UDP_RR测试运行失败.报错信息:{UDP_RR.stderr.decode('utf-8')}")
-        result1 = re.findall(r'\d+\.\d+|\d+', UDP_RR.stdout.decode('utf-8').split('\n')[6])
-        result2 = re.findall(r'\d+\.\d+|\d+', UDP_RR.stdout.decode('utf-8').split('\n')[7])
+            raise RunError(e.returncode,f"netperf测试出错:UDP_RR测试运行失败.报错信息:{decode_output(e.stdout)} {decode_output(e.stderr)}")
+        result1 = re.findall(r'\d+\.\d+|\d+', decode_output(UDP_RR.stdout).split('\n')[6])
+        result2 = re.findall(r'\d+\.\d+|\d+', decode_output(UDP_RR.stdout).split('\n')[7])
         for col, value in enumerate(result1):
             ws.cell(24, col + 2, value)
         ws.cell(25, 2, result2[0])

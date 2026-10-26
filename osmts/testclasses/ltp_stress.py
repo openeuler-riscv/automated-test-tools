@@ -1,6 +1,6 @@
 from pathlib import Path
 from collections import Counter
-import sys,subprocess,shutil,tarfile,signal,os,psutil,traceback
+import sys,subprocess,shutil,tarfile,signal,os,psutil,traceback,time
 from openpyxl import Workbook
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
@@ -9,13 +9,15 @@ from .errors import CompileError, GitCloneError, RunError, SummaryError
 
 
 class Ltp_stress():
+    # 失败明细表中每个失败用例保留的原始行样例数
+    FAILURE_SAMPLE_LIMIT = 10
+
     def __init__(self, **kwargs):
         self.rpms = {'automake','pkgconf','autoconf','bison','flex','m4','kernel-headers','glibc-headers','findutils','libtirpc','libtirpc-devel','pkg-config','sysstat'}
         self.path = Path('/root/osmts_tmp/ltp_stress')
         self.output_dir = Path('/opt/ltp_stress/output')
         self.directory: Path = kwargs.get('saved_directory') / 'ltp_stress'
         self.compiler: str = kwargs.get('compiler')
-        self.remove_osmts_tmp_dir = kwargs.get('remove_osmts_tmp_dir')
         self.result_statuses = ('PASS', 'FAIL', 'CONF', 'BROK', 'WARN', 'TPASS', 'TFAIL', 'TCONF', 'TBROK', 'TWARN')
 
 
@@ -58,10 +60,18 @@ class Ltp_stress():
         return any(':' in part for part in parts)
 
 
-    # 解析 ltpstress.log，将每条测试记录转为结构化字典并统计各状态数量
+    # 判断状态是否属于失败类(FAIL/TFAIL/BROK/TBROK)
+    def _is_failure_status(self, status: str):
+        return 'FAIL' in status or 'BROK' in status
+
+
+    # 流式解析ltpstress.log:只累计各状态总数与按用例统计,并保留失败用例的少量原始行样例
+    # (一周的日志可达数百万结果行,全部保留会耗尽内存并超出Excel行数上限)
     def _parse_ltpstress_log_entries(self, log_path: Path):
-        entries = []
         counts = Counter()
+        testcase_counts = {}
+        failure_samples = {}
+        total_parsed = 0
 
         with open(log_path, 'r', encoding='utf-8', errors='replace') as ltpstress_log:
             for line_no, raw_line in enumerate(ltpstress_log, start=1):
@@ -82,7 +92,6 @@ class Ltp_stress():
 
                 status = self._normalize_status_token(parts[status_index])
                 testcase = parts[0]
-                iteration = parts[1] if len(parts) > 1 and parts[1].isdigit() else ''
                 exit_value = ''
                 note_start_index = status_index + 1
 
@@ -94,20 +103,124 @@ class Ltp_stress():
                         break
 
                 note = ' '.join(parts[note_start_index:]) if note_start_index < len(parts) else ''
-                entries.append({
-                    'line_no': line_no,
-                    'testcase': testcase,
-                    'iteration': iteration,
-                    'result': status,
-                    'exit_value': exit_value,
-                    'note': note,
-                    'raw_line': stripped,
-                })
+                total_parsed += 1
                 counts[status] += 1
+                testcase_counts.setdefault(testcase, Counter())[status] += 1
 
-        if not entries:
+                if self._is_failure_status(status):
+                    samples = failure_samples.setdefault(testcase, [])
+                    if len(samples) < self.FAILURE_SAMPLE_LIMIT:
+                        samples.append({
+                            'line_no': line_no,
+                            'testcase': testcase,
+                            'result': status,
+                            'exit_value': exit_value,
+                            'note': note,
+                            'raw_line': stripped,
+                        })
+
+        if not total_parsed:
             raise ValueError('ltpstress.log中未找到可解析的测试结果行')
-        return entries, counts
+        return total_parsed, counts, testcase_counts, failure_samples
+
+
+    # 由产物文件生成Excel报告,可脱离测试流程独立调用(便于对既有结果重新生成)
+    def _build_report(self, artifacts_dir: Path):
+        total_parsed, result_counts, testcase_counts, failure_samples = self._parse_ltpstress_log_entries(
+            artifacts_dir / 'ltpstress.log'
+        )
+
+        wb = Workbook()
+
+        ws_summary = wb.active
+        ws_summary.title = 'ltp stress summary'
+        ws_summary.append(['Metric', 'Value', 'Note'])
+        ws_summary.append(['total parsed result lines', total_parsed, 'ltpstress.log中成功解析的结果行数'])
+        for status in self.result_statuses:
+            if result_counts.get(status):
+                ws_summary.append([f'{status} count', result_counts[status], ''])
+        fail_like_lines = sum(count for status, count in result_counts.items() if self._is_failure_status(status))
+        ws_summary.append(['fail/brok lines', fail_like_lines, 'FAIL、TFAIL、BROK、TBROK总行数'])
+        ws_summary.append(['unique testcases', len(testcase_counts), '去重后的测试项数量'])
+        ws_summary.append(['unique fail/brok testcases', len(failure_samples), '去重后的失败/阻塞测试项数量'])
+        ws_summary.append([
+            'failure samples per testcase',
+            self.FAILURE_SAMPLE_LIMIT,
+            '失败明细表中每个失败用例保留的原始行样例数,完整记录见ltpstress.log',
+        ])
+
+        ws = wb.create_sheet(title='ltp stress by testcase')
+        ws.append(['Testcase', 'Total', 'PASS', 'FAIL', 'CONF', 'Other', 'Fail Rate', 'Conclusion'])
+        for testcase, status_counts in sorted(
+            testcase_counts.items(),
+            key=lambda item: (-sum(count for status, count in item[1].items() if self._is_failure_status(status)), item[0]),
+        ):
+            total = sum(status_counts.values())
+            passed = status_counts.get('PASS', 0) + status_counts.get('TPASS', 0)
+            failed = sum(count for status, count in status_counts.items() if self._is_failure_status(status))
+            conf = status_counts.get('CONF', 0) + status_counts.get('TCONF', 0)
+            if failed and not passed:
+                conclusion = '全部失败'
+            elif failed:
+                conclusion = '部分失败'
+            else:
+                conclusion = '全部通过'
+            ws.append([
+                testcase, total, passed, failed, conf, total - passed - failed - conf,
+                round(failed / total, 4), conclusion,
+            ])
+
+        ws = wb.create_sheet(title='ltp stress failures')
+        ws.append(['Line', 'Testcase', 'Result', 'Exit Value', 'Note', 'Raw Line'])
+        for testcase in sorted(failure_samples):
+            for entry in failure_samples[testcase]:
+                ws.append([
+                    entry['line_no'], entry['testcase'], entry['result'],
+                    entry['exit_value'], entry['note'], entry['raw_line'],
+                ])
+
+        ws = wb.create_sheet(title='ltp stress iodata')
+        iodata_headers, iodata_rows = self._parse_iodata_rows(artifacts_dir / 'ltpstress.iodata')
+        ws.append(iodata_headers)
+        for row in iodata_rows:
+            ws.append([row.get(header, '') for header in iodata_headers])
+
+        # 分析sar -u结果 (CPU使用率历史数据)
+        sar_u = subprocess.run(
+            f"sar -u -f {artifacts_dir / 'ltpstress.data'}",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        cpu_output = sar_u.stdout.decode('utf-8', errors='replace')
+        with open(artifacts_dir / 'sar_cpu.txt', 'w', encoding='utf-8') as cpu_log:
+            cpu_log.write(cpu_output)
+        ws = wb.create_sheet(title='sar cpu')
+        cpu_headers, cpu_rows = self._parse_sar_output(cpu_output, '%user', 'sar cpu输出')
+        ws.append(cpu_headers)
+        for row in cpu_rows:
+            ws.append([row.get(header, '') for header in cpu_headers])
+
+        # 分析sar -r结果 (Memory使用率历史数据)
+        sar_r = subprocess.run(
+            f"sar -r -f {artifacts_dir / 'ltpstress.data'}",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        mem_output = sar_r.stdout.decode('utf-8', errors='replace')
+        with open(artifacts_dir / 'sar_memory.txt', 'w', encoding='utf-8') as mem_log:
+            mem_log.write(mem_output)
+        ws = wb.create_sheet(title='sar memory')
+        mem_headers, mem_rows = self._parse_sar_output(mem_output, 'kbmemfree', 'sar memory输出')
+        ws.append(mem_headers)
+        for row in mem_rows:
+            ws.append([row.get(header, '') for header in mem_headers])
+
+        self._autosize_workbook(wb)
+        report_path = artifacts_dir / 'ltp_stress_report.xlsx'
+        wb.save(report_path)
+        return report_path
 
 
     # 解析 iostat 格式的 iodata 文件，返回表头列表和数据行列表
@@ -215,7 +328,17 @@ class Ltp_stress():
             self._autosize_worksheet(worksheet)
 
 
+    # 删除目录前先改名备份,避免覆盖上次的测试产物(改名不复制数据,无额外IO开销)
+    def _backup_if_exists(self, target: Path):
+        if not target.exists() or not any(target.iterdir()):
+            return
+        backup = target.with_name(f'{target.name}.bak-{time.strftime("%Y%m%d-%H%M%S")}')
+        target.rename(backup)
+        print(f'{target} 已存在,原内容已备份到 {backup}')
+
+
     def pre_test(self):
+        self._backup_if_exists(self.directory)
         if self.directory.exists():
             shutil.rmtree(self.directory)
         self.directory.mkdir(exist_ok=True, parents=True)
@@ -225,7 +348,7 @@ class Ltp_stress():
         # 拉取源码
         repo_url = "https://gitee.com/April_Zhao/ltp_stress.git"
         git_clone = subprocess.run(
-            f"cd /root/osmts_tmp/ && git clone {repo_url}",
+            f"cd /root/osmts_tmp/ && GIT_TERMINAL_PROMPT=0 git clone {repo_url}",
             shell=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -258,6 +381,7 @@ class Ltp_stress():
 
     def run_test(self):
         print('ltp_stress测试需要7x24小时,期间请勿中断osmts.')
+        self._backup_if_exists(self.output_dir)
         if self.output_dir.exists():
             shutil.rmtree(self.output_dir)
         pending_run_error_code = None
@@ -317,83 +441,7 @@ class Ltp_stress():
                 tar.add(self.directory / artifact_name, arcname=artifact_name)
         # ---------------------------------------------------------------
 
-        # 分析ltpstress.log文件,进行统计
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'ltp stress report'
-        ws.append(['Line', 'Testcase', 'Iteration', 'Result', 'Exit Value', 'Note', 'Raw Line'])
-        log_entries, result_counts = self._parse_ltpstress_log_entries(self.directory / 'ltpstress.log')
-        for entry in log_entries:
-            ws.append([
-                entry['line_no'],
-                entry['testcase'],
-                entry['iteration'],
-                entry['result'],
-                entry['exit_value'],
-                entry['note'],
-                entry['raw_line'],
-            ])
-
-        wb.create_sheet(title='ltp stress summary')
-        ws_summary = wb['ltp stress summary']
-        ws_summary.append(['Metric', 'Value', 'Note'])
-        ws_summary.append(['total parsed result lines', len(log_entries), 'ltpstress.log中成功解析的结果行数'])
-        for status in self.result_statuses:
-            if result_counts.get(status):
-                ws_summary.append([f'{status} count', result_counts[status], ''])
-        fail_like_entries = [entry for entry in log_entries if 'FAIL' in entry['result'] or 'BROK' in entry['result']]
-        ws_summary.append(['fail/brok lines', len(fail_like_entries), 'FAIL、TFAIL、BROK、TBROK总行数'])
-        ws_summary.append([
-            'unique fail/brok testcases',
-            len({entry['testcase'] for entry in fail_like_entries}),
-            '去重后的失败/阻塞测试项数量',
-        ])
-
-
-        # 分析ltpstress.iodata
-        wb.create_sheet(title='ltp stress iodata')
-        ws = wb['ltp stress iodata']
-        iodata_headers, iodata_rows = self._parse_iodata_rows(self.directory / 'ltpstress.iodata')
-        ws.append(iodata_headers)
-        for row in iodata_rows:
-            ws.append([row.get(header, '') for header in iodata_headers])
-
-        # 分析sar -u结果 (CPU使用率历史数据)
-        sar_u = subprocess.run(
-            f"sar -u -f {self.directory / 'ltpstress.data'}",
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        cpu_output = sar_u.stdout.decode('utf-8', errors='replace')
-        with open(self.directory / 'sar_cpu.txt', 'w', encoding='utf-8') as cpu_log:
-            cpu_log.write(cpu_output)
-        wb.create_sheet(title='sar cpu')
-        ws = wb['sar cpu']
-        cpu_headers, cpu_rows = self._parse_sar_output(cpu_output, '%user', 'sar cpu输出')
-        ws.append(cpu_headers)
-        for row in cpu_rows:
-            ws.append([row.get(header, '') for header in cpu_headers])
-
-        # 分析sar -r结果 (Memory使用率历史数据)
-        sar_r = subprocess.run(
-            f"sar -r -f {self.directory / 'ltpstress.data'}",
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        mem_output = sar_r.stdout.decode('utf-8', errors='replace')
-        with open(self.directory / 'sar_memory.txt', 'w', encoding='utf-8') as mem_log:
-            mem_log.write(mem_output)
-        wb.create_sheet(title='sar memory')
-        ws = wb['sar memory']
-        mem_headers, mem_rows = self._parse_sar_output(mem_output, 'kbmemfree', 'sar memory输出')
-        ws.append(mem_headers)
-        for row in mem_rows:
-            ws.append([row.get(header, '') for header in mem_headers])
-
-        self._autosize_workbook(wb)
-        wb.save(self.directory / 'ltp_stress_report.xlsx')
+        self._build_report(self.directory)
         if pending_run_error_code is not None:
             result_log = self.output_dir / 'ltpstress.log'
             error_message = (

@@ -13,6 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment
 
 from .errors import DnfError, DefaultError
+from .utils import decode_output
 
 
 """
@@ -30,25 +31,57 @@ JDK_RPM_PATTERNS = {
     8: 'java-1.8.0-openjdk*',
     11: 'java-11-openjdk*',
     17: 'java-17-openjdk*',
+    21: 'java-21-openjdk*',
 }
 
 JDK_GITHUB_REPOS = {
     8: 'openjdk/jdk8u-dev',
     11: 'openjdk/jdk11u-dev',
     17: 'openjdk/jdk17u-dev',
+    21: 'openjdk/jdk21u-dev',
+}
+
+# jtreg 版本与 JDK 的对应关系,取自各 JDK 官方构建配置 make/conf/jib-profiles.js
+# (其中 jtreg 依赖项写明了该 JDK 使用的 jtreg 版本):
+#   jdk11u-dev -> bundles/jtreg-7.3.1+1.zip
+#   jdk17u-dev -> bundles/jtreg-7.5.2+1.zip
+#   jdk21u-dev -> bundles/jtreg-8.2.1+1.zip
+# JDK8 的构建系统没有 jib-profiles.js,沿用验证可用的 jtreg 4.2-b16。
+# 注意:jdk17 用 7.3.1 会失败(实测),必须用 7.5.2。
+JTREG_VERSION = {
+    8: '4.2-b16',
+    11: '7.3.1+1',
+    17: '7.5.2+1',
+    21: '8.2.1+1',
+}
+
+# shipilev 站点的文件名规则不统一:
+#   JDK8  -> jtreg4.2-b16.zip   (无连字符)
+#   JDK11+-> jtreg-7.3.1+1.zip  (有连字符)
+# 故直接保存文件名,不做字符串拼接(拼接会生成 jtreg7.3.1+1.zip 这种不存在的地址)。
+JTREG_ZIP_FILENAME = {
+    8: 'jtreg4.2-b16.zip',
+    11: 'jtreg-7.3.1+1.zip',
+    17: 'jtreg-7.5.2+1.zip',
+    21: 'jtreg-8.2.1+1.zip',
 }
 
 JTREG_SHIPILEV_URL = {
-    8: 'https://builds.shipilev.net/jtreg/jtreg4.2-b16.zip',
-    11: 'https://builds.shipilev.net/jtreg/jtreg-7.3.1+1.zip',
-    17: 'https://builds.shipilev.net/jtreg/jtreg-7.3.1+1.zip',
+    major: f'https://builds.shipilev.net/jtreg/{filename}'
+    for major, filename in JTREG_ZIP_FILENAME.items()
 }
 
-JTREG_EXPECTED_DIR = {
-    8: 'jtreg-4.2',
-    11: 'jtreg-7.3.1',
-    17: 'jtreg-7.3.1',
-}
+# 这些zip解压后的顶层目录都叫 jtreg(不带版本号),因此不同JDK的jtreg必须解压到
+# 各自独立的子目录,否则后一个版本会覆盖前一个。此处记录用于校验/提示。
+JTREG_EXTRACTED_DIRNAME = 'jtreg'
+
+# 下载产物的子目录名:按JDK版本隔离,避免互相覆盖
+JTREG_TOOL_SUBDIR = 'jtreg_tool'
+JDK_SRC_SUBDIR = 'jdk_src'
+
+# 单个JDK版本的下载/解压完成标记(放在该版本的工具目录内)
+JTREG_DOWNLOAD_MARK = '.osmts_download_complete'
+
 
 
 def install_rpm(package_name):
@@ -60,7 +93,7 @@ def install_rpm(package_name):
             stderr=subprocess.PIPE,
         )
     except subprocess.CalledProcessError as e:
-        stderr_msg = e.stderr.decode('utf-8') if e.stderr else ''
+        stderr_msg = decode_output(e.stderr) if e.stderr else ''
         raise DnfError(e.returncode, stderr_msg)
 
 
@@ -73,16 +106,10 @@ def remove_rpm(package_name):
             stderr=subprocess.PIPE,
         )
     except subprocess.CalledProcessError as e:
-        stderr_msg = e.stderr.decode('utf-8') if e.stderr else ''
+        stderr_msg = decode_output(e.stderr) if e.stderr else ''
         raise DnfError(e.returncode, stderr_msg)
 
 
-def clean_java_environment():
-    for pattern in JDK_RPM_PATTERNS.values():
-        remove_rpm(pattern)
-
-
-# 根据版本号分量构造对应的 OpenJDK 源码 tag 字符串
 def _build_jdk_tag(major, ver1, ver2, ver3, ver4, ver5):
     if major == 8:
         return f"jdk8u{int(ver4):03d}-b{ver5}"
@@ -98,8 +125,8 @@ def detect_java_version(major_ver):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    stdout = result.stdout.decode('utf-8') if result.stdout else ''
-    stderr = result.stderr.decode('utf-8') if result.stderr else ''
+    stdout = decode_output(result.stdout) if result.stdout else ''
+    stderr = decode_output(result.stderr) if result.stderr else ''
     output = stdout + stderr
     print(f"[jtreg] java -version 原始输出:\n{output.strip() if output.strip() else '(空)'}")
 
@@ -194,6 +221,7 @@ def _download_and_extract_zip(url, extract_to, progress_label, timeout, max_retr
                 response.raise_for_status()
                 total = int(response.headers.get('content-length', 0))
                 downloaded = 0
+                last_pct = -1
 
                 with open(archive_path, 'wb') as archive_file:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -203,10 +231,14 @@ def _download_and_extract_zip(url, extract_to, progress_label, timeout, max_retr
                         downloaded += len(chunk)
                         if total > 0:
                             pct = downloaded * 100 // total
-                            print(f"\r[jtreg] {progress_label} 下载进度: {pct}%", end='', flush=True)
+                            # 按10%粒度打印:每1MB打印一次会把控制台刷满
+                            # (板上网速慢,150MB的源码包会输出上百行)
+                            if pct >= last_pct + 10:
+                                last_pct = pct
+                                print(f"[jtreg] {progress_label} 下载进度: {pct}%")
 
                 if total > 0:
-                    print()
+                    print(f"[jtreg] {progress_label} 下载进度: 100%")
 
             if not zipfile.is_zipfile(archive_path):
                 raise zipfile.BadZipFile(f"{archive_path} 不是有效的 zip 文件")
@@ -248,20 +280,98 @@ def _download_jtreg(url, extract_to, major_ver):
         progress_label=f"下载 jtreg 工具 (JDK {major_ver})",
         timeout=(30, 300),
     )
-    jt_bin = None
+    _ensure_jtreg_executable(extract_to)
+
+
+def _ensure_jtreg_executable(extract_to):
+    """把解压出来的 jtreg 可执行文件补上执行权限。
+
+    jtreg 的 zip 解压后顶层目录固定叫 jtreg(zip 内不含权限位),
+    故要显式 chmod,否则调用时会 Permission denied。
+    """
     for root, dirs, files in os.walk(extract_to):
-        for f in files:
-            if f == 'jtreg' and 'bin' in root:
-                jt_bin = Path(root) / f
-                break
-        if jt_bin:
-            break
-    if jt_bin and jt_bin.exists():
-        jt_bin.chmod(0o755)
-        print(f"[jtreg] 已设置 {jt_bin} 执行权限")
+        if Path(root).name == 'bin' and 'jtreg' in files:
+            jt_bin = Path(root) / 'jtreg'
+            jt_bin.chmod(0o755)
+            print(f"[jtreg] 已设置 {jt_bin} 执行权限")
+            return jt_bin
+    return None
+
+
+def _detect_java_home():
+    """定位刚安装的JDK根目录,返回(Path 或 None, 说明)。
+
+    jtreg 的启动脚本按 JTREG_JAVA/JT_JAVA -> JAVA_HOME -> -jdk -> 裸'java'
+    的顺序定位 Java;前三者都没设且 PATH 里没有 java 时,
+    会直接打印 "No java executable at java" 并退出 —— 实测症状正是如此,
+    因此必须显式给出 JAVA_HOME(或 JT_JAVA)。
+
+    jtreg 还要用 javac 编译测试用例,所以只装JRE不够,这里一并校验 javac。
+    """
+    java_path = shutil.which('java')
+    if not java_path:
+        return None, 'PATH中找不到java'
+
+    real = Path(java_path)
+    try:
+        real = real.resolve()
+    except OSError:
+        pass
+
+    # java 通常是指向 <JDK根>/bin/java 的 alternatives 符号链接,解析后即得JDK根
+    candidate = real.parent.parent
+    if (candidate / 'bin' / 'javac').exists():
+        return candidate, '经符号链接解析'
+
+    # 否则从 java 所在位置逐级向上找同时含 bin/java 与 bin/javac 的目录
+    for parent in real.parents:
+        if (parent / 'bin' / 'java').exists() and (parent / 'bin' / 'javac').exists():
+            return parent, '向上查找'
+
+    return None, (f'java位于{real},但未找到配套的javac;'
+                  f'jtreg需要用javac编译测试用例,请安装对应JDK的开发包'
+                  f'(如 java-21-openjdk-devel)')
+
+
+def _read_log_tail(log_path, lines=20):
+    """读取日志末尾若干行(用 os.SEEK_END 从尾部读,避免把整份日志读进内存)。"""
+    try:
+        with open(log_path, 'rb') as log:
+            log.seek(0, os.SEEK_END)
+            size = log.tell()
+            chunk = min(size, 64 * 1024)
+            log.seek(size - chunk)
+            data = log.read(chunk)
+    except OSError:
+        return ''
+    text = data.decode('utf-8', errors='replace')
+    return '\n'.join(text.splitlines()[-lines:])
+
+
+def _apply_sheet_style(worksheet):
+    """统一表格样式:顶端对齐 + 自动换行(两张表都用,避免只设一半)。"""
+    for cells in worksheet.iter_rows():
+        for cell in cells:
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
 
 
 class Jtreg:
+    """运行 Jtreg 回归测试。
+
+    默认跑全部支持的JDK版本(8/11/17/21);子类把 tools 收窄为单个版本,
+    便于把各版本拆开单独跑 —— 每个版本的tier1都很长,合并跑时
+    某个版本失败会掩盖其它版本的结果。
+
+    ⚠️ 不要同时配置 jtreg 与 jtreg_<同一版本>:
+      两者的工作目录(/root/osmts_tmp/jtreg)与结果目录都相同,
+      同一个JDK版本被同时测试时,一方会删除另一方的 jdkN/ 工作目录、
+      两者的下载目录会互相清理、日志文件会交错写入,
+      产生"看起来跑完了、结果其实是错的"静默故障。
+      例如 run_tests = ['jtreg_8', 'jtreg_11'] 是正确的分法;
+      run_tests = ['jtreg', 'jtreg_8'] 会让 JDK8 被跑两遍且互相破坏。
+    """
+    tools = tuple(sorted(JDK_RPM_PATTERNS.keys()))
+
     def __init__(self, **kwargs):
         self.rpms = {'subversion', 'screen', 'samba', 'samba-client', 'gdb',
                      'automake', 'lrzsz', 'expect', 'libX11*', 'libxt*', 'libXtst*',
@@ -271,41 +381,84 @@ class Jtreg:
         self.path = Path('/root/osmts_tmp/jtreg')
         self.directory: Path = kwargs.get('saved_directory') / 'jtreg'
 
-    # 初始化结果目录和工作目录，清理上次遗留的临时文件
+    def _tools_to_run(self):
+        """要运行的JDK版本列表(按版本号升序),只保留常量表里支持的版本。"""
+        return sorted(v for v in self.tools if v in JDK_RPM_PATTERNS)
+
+    def _result_stem(self):
+        """结果文件的基础名,由本类覆盖的JDK版本决定。
+
+        多个 jtreg_* 测试项的 directory 都是 saved_directory/jtreg,
+        若汇总表用固定名 jtreg.xlsx,jtreg_8 与 jtreg_11 先后运行会互相覆盖,
+        最后只剩一份报表。带上版本号后各测试项的产物互不冲突,
+        也便于事后判断"这份报表覆盖了哪些JDK版本"。
+        """
+        versions = self._tools_to_run()
+        suffix = '_'.join(str(v) for v in versions) if versions else 'none'
+        return f'jtreg_{suffix}'
+
+    def _excel_name(self):
+        """汇总报表文件名(含本类覆盖的JDK版本,避免多个 jtreg_* 测试项互相覆盖)。"""
+        return f'{self._result_stem()}.xlsx'
+
+    # 返回某个JDK版本专属的工作目录(工具与源码分开放,避免不同版本互相覆盖)
+    def _version_dirs(self, major_ver):
+        tool_dir = self.path / JTREG_TOOL_SUBDIR / f'jdk{major_ver}'
+        src_dir = self.path / JDK_SRC_SUBDIR / f'jdk{major_ver}'
+        return tool_dir, src_dir
+
+    # 初始化结果目录和工作目录
     def _setup_workdir(self):
         if not self.directory.exists():
             self.directory.mkdir(parents=True)
-        if self.path.exists():
-            shutil.rmtree(self.path)
-        self.path.mkdir(parents=True)
+        if not self.path.exists():
+            self.path.mkdir(parents=True)
+
+    # 确保某个JDK版本所需的 jtreg 与源码已就绪(复用已下载产物)
+    def _ensure_downloads(self, info, major_ver):
+        tool_dir, src_dir = self._version_dirs(major_ver)
+        mark = tool_dir / JTREG_DOWNLOAD_MARK
+        if mark.exists() and (src_dir / 'test').exists():
+            print(f"[jtreg] 复用已下载的 jtreg {JTREG_VERSION[major_ver]} 与源码: {tool_dir}")
+            return
+        # 半成品目录清掉重来:中断的解压结果不能直接使用
+        for stale in (tool_dir, src_dir):
+            if stale.exists():
+                shutil.rmtree(stale, ignore_errors=True)
+        tool_dir.mkdir(parents=True, exist_ok=True)
+        src_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[jtreg] 第3步: 下载源码和 jtreg (jtreg {JTREG_VERSION[major_ver]})")
+        _download_jdk_source(info['src_url'], src_dir, major_ver)
+        _download_jtreg(JTREG_SHIPILEV_URL[major_ver], tool_dir, major_ver)
+        mark.touch()
 
     # 在工作目录中定位 jtreg 可执行目录和 JDK 源码目录，填充 info 字典
     def _resolve_paths(self, info, major_ver):
-        print(f"[jtreg] 解压后 {self.path} 目录内容: {list(self.path.iterdir())}")
+        tool_dir, src_dir = self._version_dirs(major_ver)
+        print(f"[jtreg] jtreg 工具目录内容: {list(tool_dir.iterdir())}")
 
-        expected_dir = JTREG_EXPECTED_DIR[major_ver]
-        jt_home = self.path / expected_dir
-        if not jt_home.exists():
-            found = _find_jtreg_dir(self.path)
-            if found:
-                jt_home = found
-                print(f"[jtreg] 未找到预期目录 {expected_dir}, "
-                      f"已找到 jtreg 目录: {jt_home.name}")
-            else:
+        # zip 解压后顶层目录固定叫 jtreg(不带版本号),故按目录名定位而非版本号
+        jt_home = tool_dir / JTREG_EXTRACTED_DIRNAME
+        if not (jt_home / 'bin' / 'jtreg').exists():
+            found = _find_jtreg_dir(tool_dir)
+            if found is None:
                 raise FileNotFoundError(
-                    f"无法在 {self.path} 中找到 jtreg 目录"
+                    f"无法在 {tool_dir} 中找到 jtreg 目录"
                 )
+            jt_home = found
+            print(f"[jtreg] 未找到预期目录 {JTREG_EXTRACTED_DIRNAME}, "
+                  f"已找到 jtreg 目录: {jt_home.name}")
 
         repo_name = info['src_repo'].split('/')[1]
         repo_dir = None
-        for item in self.path.iterdir():
+        for item in src_dir.iterdir():
             if item.is_dir() and repo_name in item.name:
                 repo_dir = item
                 break
 
         if repo_dir is None:
             raise FileNotFoundError(
-                f"无法在 {self.path} 中找到源码目录 (关键词: {repo_name})"
+                f"无法在 {src_dir} 中找到源码目录 (关键词: {repo_name})"
             )
 
         if not (repo_dir / 'test').exists():
@@ -326,6 +479,7 @@ class Jtreg:
             8: 'hotspot/test:hotspot_tier1 langtools/test:langtools_tier1 jdk/test:jdk_tier1',
             11: 'test/langtools:tier1 test/hotspot/jtreg:tier1 test/jdk:tier1 test/jaxp:tier1',
             17: 'test/hotspot/jtreg:tier1 test/langtools:tier1 test/jdk:tier1 test/jaxp:tier1 test/lib-test:tier1',
+            21: 'test/hotspot/jtreg:tier1 test/langtools:tier1 test/jdk:tier1 test/jaxp:tier1 test/lib-test:tier1',
         }
         return specs.get(major_ver, '')
 
@@ -346,7 +500,7 @@ class Jtreg:
         jt_home = Path(version_info['jt_home'])
         test_dir = Path(version_info['test_dir'])
         output_dirs = self._prepare_version_output_dirs(major_ver)
-        log_path = self.directory / f'OpenJDK{major_ver}.log'
+        log_path = self.directory / f'{self._result_stem()}_OpenJDK{major_ver}.log'
         cmd = [
             str(jt_home / 'bin' / 'jtreg'),
             '-va',
@@ -359,11 +513,24 @@ class Jtreg:
             f"-r:{output_dirs['jtreport']}",
             *shlex.split(test_spec),
         ]
+        # jtreg 启动脚本靠 JT_JAVA/JAVA_HOME/-jdk/PATH 定位Java,四者皆无时
+        # 直接报 "No java executable at java" 并退出(实测症状)。
+        # 这里显式指向刚安装的JDK:JT_JAVA 优先级最高,JAVA_HOME 同时设置
+        # 以兼容老版本jtreg;PATH 里也补上,便于jtreg内部调用javac等工具。
+        java_home, java_reason = _detect_java_home()
+        if java_home is None:
+            raise DefaultError(
+                f"jtreg测试出错.OpenJDK {major_ver} 未找到可用的JDK:{java_reason}"
+            )
         env = os.environ.copy()
         env['JT_HOME'] = str(jt_home)
+        env['JAVA_HOME'] = str(java_home)
+        env['JT_JAVA'] = str(java_home / 'bin' / 'java')
+        env['PATH'] = f"{java_home / 'bin'}{os.pathsep}{env.get('PATH', '')}"
 
         print(f"[jtreg] 执行 jtreg 命令:")
         print(f"  JT_HOME = {jt_home}")
+        print(f"  JAVA_HOME = {java_home} ({java_reason})")
         print(f"  test_dir = {test_dir}")
         print(f"  test_spec = {test_spec}")
         print(f"  JTreport = {output_dirs['jtreport']}")
@@ -386,15 +553,21 @@ class Jtreg:
         version_info['log_path'] = log_path
         version_info['returncode'] = jtreg.returncode
         version_info['command'] = ' '.join(shlex.quote(part) for part in cmd)
+        version_info['log_tail'] = _read_log_tail(log_path)
         return jtreg.returncode
 
     # 将 jtreg 生成的 summary.txt 复制到结果目录
     def _copy_summary(self, version_info, major_ver):
         summary_source = version_info['jtreport'] / 'text' / 'summary.txt'
         if not summary_source.exists():
+            # 附上日志尾部:真正的根因(jtreg自身的报错,如
+            # "No java executable at java")写在日志里,
+            # 只说"未生成summary.txt"会逼着人再去翻日志
+            tail = version_info.get('log_tail') or '(日志为空)'
             raise DefaultError(
                 f"jtreg测试出错.OpenJDK {major_ver} 未生成JTreport/text/summary.txt,"
-                f"jtreg返回值:{version_info['returncode']}.详细信息请查看:{version_info['log_path']}"
+                f"jtreg返回值:{version_info['returncode']}."
+                f"日志{version_info['log_path']}末尾:\n{tail}"
             )
 
         summary_target = self.directory / f'OpenJDK{major_ver}_summary.txt'
@@ -408,6 +581,9 @@ class Jtreg:
         jtreport = version_info['jtreport']
         jtwork = version_info['jtwork']
         pkg_name = self.directory / f'OpenJDK{major_ver}_jtreg_output.tar.gz'
+        # 必须先置 None:调用方无条件读取 package_path,
+        # 若此处提前 return 不赋值,会抛 KeyError 中断后续所有 JDK 版本
+        version_info['package_path'] = None
 
         items_to_pack = []
         if jtreport.exists():
@@ -490,6 +666,14 @@ class Jtreg:
             error = counter.get('Error', 0)
             other = total - passed - failed - error
 
+            package_path = result.get('package_path')
+            note = 'jtreg非0返回值通常表示存在失败/错误用例, 以summary.txt统计为准'
+            if not package_path:
+                note = '未生成产物归档(JTreport/JTwork均不存在); ' + note
+            # 该版本整体失败的记录:摘要/统计都不可得,note里说明原因
+            if result.get('error'):
+                note = f"该版本测试未完成: {result['error']}"
+
             ws_overview.append([
                 f"OpenJDK{result['major_ver']}",
                 result['build'],
@@ -499,10 +683,10 @@ class Jtreg:
                 failed,
                 error,
                 other,
-                str(result['summary_path']),
-                str(result['log_path']),
-                str(result['package_path']),
-                'jtreg非0返回值通常表示存在失败/错误用例, 以summary.txt统计为准',
+                str(result['summary_path']) if result['summary_path'] else '(未生成)',
+                str(result['log_path']) if result['log_path'] else '(未生成)',
+                str(package_path) if package_path else '(未生成)',
+                note,
             ])
 
             ws_detail = wb.create_sheet(title=f"OpenJDK{result['major_ver']}")
@@ -510,44 +694,32 @@ class Jtreg:
             for row in result['rows']:
                 ws_detail.append([row['test_name'], row['status'], row['detail']])
 
+            # 明细表同样要设列宽:原先只给overview设了,明细表打开是默认列宽、内容挤在一起
             ws_detail.freeze_panes = 'A2'
-            ws_detail.column_dimensions['A'].width = 72
-            ws_detail.column_dimensions['B'].width = 14
-            ws_detail.column_dimensions['C'].width = 52
-            for cells in ws_detail.iter_rows():
-                for cell in cells:
-                    cell.alignment = Alignment(vertical='top', wrap_text=True)
+            for column, width in (('A', 72), ('B', 14), ('C', 52)):
+                ws_detail.column_dimensions[column].width = width
+            _apply_sheet_style(ws_detail)
 
         ws_overview.freeze_panes = 'A2'
-        ws_overview.column_dimensions['A'].width = 12
-        ws_overview.column_dimensions['B'].width = 24
-        ws_overview.column_dimensions['C'].width = 16
-        ws_overview.column_dimensions['D'].width = 10
-        ws_overview.column_dimensions['E'].width = 10
-        ws_overview.column_dimensions['F'].width = 10
-        ws_overview.column_dimensions['G'].width = 10
-        ws_overview.column_dimensions['H'].width = 10
-        ws_overview.column_dimensions['I'].width = 34
-        ws_overview.column_dimensions['J'].width = 30
-        ws_overview.column_dimensions['K'].width = 34
-        ws_overview.column_dimensions['L'].width = 44
-        for cells in ws_overview.iter_rows():
-            for cell in cells:
-                cell.alignment = Alignment(vertical='top', wrap_text=True)
+        for column, width in (('A', 12), ('B', 24), ('C', 16), ('D', 10), ('E', 10),
+                              ('F', 10), ('G', 10), ('H', 10), ('I', 34), ('J', 30),
+                              ('K', 34), ('L', 44)):
+            ws_overview.column_dimensions[column].width = width
+        _apply_sheet_style(ws_overview)
 
-        wb.save(self.directory / 'jtreg.xlsx')
+        wb.save(self.directory / self._excel_name())
 
     def run(self):
-        print('开始进行jtreg测试')
+        print(f'开始进行jtreg测试,测试项:{self.tools}')
         self._setup_workdir()
         version_results = []
+        version_errors = []
 
-        for major_ver in sorted(JDK_RPM_PATTERNS.keys()):
+        for major_ver in self._tools_to_run():
             print(f"[jtreg] ========== JDK {major_ver} 测试开始 ==========")
 
             rpm = JDK_RPM_PATTERNS[major_ver]
             installed = False
-            version_error = None
             try:
                 print(f"[jtreg] 第1步: 安装 {rpm}")
                 install_rpm(rpm)
@@ -559,9 +731,7 @@ class Jtreg:
                     print(f"[jtreg] JDK {major_ver} 版本检测失败，跳过")
                     continue
 
-                print(f"[jtreg] 第3步: 下载源码和 jtreg")
-                _download_jdk_source(info['src_url'], self.path, major_ver)
-                _download_jtreg(JTREG_SHIPILEV_URL[major_ver], self.path, major_ver)
+                self._ensure_downloads(info, major_ver)
 
                 print(f"[jtreg] 第4步: 解析路径")
                 self._resolve_paths(info, major_ver)
@@ -579,22 +749,62 @@ class Jtreg:
                     'returncode': info['returncode'],
                     'summary_path': info['summary_path'],
                     'log_path': info['log_path'],
-                    'package_path': info['package_path'],
+                    'package_path': info.get('package_path'),
                     'rows': self._parse_summary_file(info['summary_path']),
+                    'error': None,
                 })
-                self._save_excel(version_results)
             except Exception as e:
-                version_error = e
-                raise
+                # 单个JDK版本失败不得终止其它版本:每个版本的tier1都很贵
+                # (源码下载 + 长时间运行),一个版本出问题就让其余版本完全不跑,
+                # 会浪费掉整轮测试。此处记录失败并继续下一个版本。
+                # 但失败必须最终反映到 osmts 的结果表:否则从 run() 正常返回
+                # 会被记为 success,出现"任务失败却显示成功"的错误报告。
+                print(f"[jtreg] JDK {major_ver} 测试失败: {e}")
+                version_errors.append(e)
+                version_results.append({
+                    'major_ver': major_ver,
+                    'build': '(未完成)',
+                    'returncode': '-',
+                    'summary_path': None,
+                    'log_path': getattr(self, '_current_log', None),
+                    'package_path': None,
+                    'rows': [],
+                    'error': str(e),
+                })
             finally:
                 if installed:
                     print(f"[jtreg] 第5步: 卸载 {rpm}")
                     try:
                         remove_rpm(rpm)
                     except Exception as cleanup_error:
-                        if version_error is None:
-                            raise
                         print(f"[jtreg] 卸载 {rpm} 失败: {cleanup_error}")
+                # 每轮都落盘:否则后面的版本失败会让前面已完成版本的结果一起丢失
+                self._save_excel(version_results)
                 print(f"[jtreg] ========== JDK {major_ver} 测试结束 ==========\n")
 
+        print(f"[jtreg] 已生成汇总报表: {self.directory / self._excel_name()}")
+        failed = [r['major_ver'] for r in version_results if r.get('error')]
+        if failed:
+            # 让 osmts 把本测试记为 failed(全部版本的结果已在 Excel 中保留)
+            raise version_errors[0]
         print('jtreg测试结束')
+
+
+class Jtreg8(Jtreg):
+    """只运行 OpenJDK 8 的 jtreg 测试"""
+    tools = (8,)
+
+
+class Jtreg11(Jtreg):
+    """只运行 OpenJDK 11 的 jtreg 测试"""
+    tools = (11,)
+
+
+class Jtreg17(Jtreg):
+    """只运行 OpenJDK 17 的 jtreg 测试"""
+    tools = (17,)
+
+
+class Jtreg21(Jtreg):
+    """只运行 OpenJDK 21 的 jtreg 测试"""
+    tools = (21,)

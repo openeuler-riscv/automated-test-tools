@@ -6,6 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment
 
 from .errors import RunError,SummaryError
+from .utils import decode_output
 
 
 
@@ -40,13 +41,15 @@ class Wrk:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,'wrk命令运行报错,报错信息:' + e.stderr.decode('utf-8'))
+            raise RunError(e.returncode,'wrk命令运行报错,报错信息:' + decode_output(e.stderr))
 
-        self.test_result = wrk.stdout.decode('utf-8')
-        stderr_text = wrk.stderr.decode('utf-8')
+        # default="":结果数据,None 必须保持为空,否则下面的 if 会把
+        # "(无输出)" 哨兵当成真实 stderr 追加进 wrk.log
+        self.test_result = decode_output(wrk.stdout, default="")
+        stderr_text = decode_output(wrk.stderr, default="")
         if stderr_text.strip():
             self.test_result = f"{self.test_result}\n\n[stderr]\n{stderr_text}"
-        with open(self.directory / 'wrk.log','w') as file:
+        with open(self.directory / 'wrk.log','w', encoding='utf-8') as file:
             file.write(self.test_result)
 
 

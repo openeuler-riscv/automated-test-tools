@@ -3,6 +3,7 @@ import subprocess, re, os, shutil
 from openpyxl import Workbook
 
 from .errors import GitCloneError,DefaultError
+from .utils import decode_output
 
 
 """
@@ -29,14 +30,17 @@ class Ltp_posix(object):
         if not Path('/opt/ltp').exists():
             try:
                 subprocess.run(
-                    "git clone https://github.com/linux-test-project/ltp.git",
+                    "GIT_TERMINAL_PROMPT=0 git clone https://github.com/linux-test-project/ltp.git",
                     cwd="/root/osmts_tmp/",
                     shell=True,check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
+                    timeout=300,
                 )
             except subprocess.CalledProcessError as e:
                 raise GitCloneError(e.returncode,'https://github.com/linux-test-project/ltp.git',e.stderr.decode())
+            except subprocess.TimeoutExpired:
+                raise GitCloneError(1, 'https://github.com/linux-test-project/ltp.git', 'git clone timeout'.encode())
 
         try:
             make = subprocess.run(
@@ -47,7 +51,7 @@ class Ltp_posix(object):
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"ltp_posix测试出错.configure和make all出错.报错信息:{e.decode('utf-8')}")
+            raise DefaultError(f"ltp_posix测试出错.configure和make all出错.报错信息:{decode_output(e.stderr)}")
         
         self._patch_scripts()
         self._scan_test_list()
@@ -84,10 +88,15 @@ class Ltp_posix(object):
             env={**os.environ, 'OUTPUT_FORMAT': 'structured'},
         )
         if runltp.returncode != 0:
-            print(f"ltp_posix测试出错.run-all-posix-option-group-tests.sh脚本报错:报错信息:{runltp.stderr.decode('utf-8')}")
+            print(f"ltp_posix测试出错.run-all-posix-option-group-tests.sh脚本报错:报错信息:{decode_output(runltp.stderr)}")
 
-        self.test_result = runltp.stdout.decode('utf-8')
-        with open(self.directory / 'ltp_posix.log', 'w') as file:
+        # POSIX 套件输出可达数小时,一旦含非法字节,严格解码会丢掉全部结果。
+        # 这里先把原始 bytes 落盘(保证可追溯),再用 replace 容错解码出可分析文本。
+        raw_log = self.directory / 'ltp_posix.raw.log'
+        with open(raw_log, 'wb') as raw_file:
+            raw_file.write(runltp.stdout or b'')
+        self.test_result = decode_output(runltp.stdout)
+        with open(self.directory / 'ltp_posix.log', 'w', encoding='utf-8') as file:
             file.write(self.test_result)
         
         self._parse_results()

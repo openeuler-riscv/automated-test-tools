@@ -7,6 +7,7 @@ import pymysql,time
 import sys,subprocess,shutil
 
 from .errors import DefaultError,RunError,SummaryError
+from .utils import decode_output
 
 
 class sysBench:
@@ -422,7 +423,7 @@ class sysBench:
                 stderr=subprocess.PIPE,
             )
             if sysbench_clean.returncode != 0:
-                print(f"sysbench测试.清理测试数据失败,报错信息:{sysbench_clean.stderr.decode('utf-8')}")
+                print(f"sysbench测试.清理测试数据失败,报错信息:{decode_output(sysbench_clean.stderr)}")
 
         if hasattr(self, 'mysqld'):
             try:

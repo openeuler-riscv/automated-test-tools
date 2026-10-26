@@ -1,9 +1,10 @@
 from pathlib import Path
-import os,signal,sys,subprocess,re,time
+import os,signal,subprocess,re,time
 from collections import Counter, defaultdict, deque
 from openpyxl import Workbook
 
 from .errors import DefaultError,GitCloneError
+from .utils import decode_output
 
 
 class Trinity:
@@ -383,7 +384,7 @@ class Trinity:
                     stderr=subprocess.PIPE
                 )
             except subprocess.CalledProcessError as e:
-                raise DefaultError(f"trinity测试出错:无法创建临时测试用户trinity_test.报错信息:{e.stderr.decode('utf-8')}")
+                raise DefaultError(f"trinity测试出错:无法创建临时测试用户trinity_test.报错信息:{decode_output(e.stderr)}")
 
         else:
             self._terminate_user_processes()
@@ -394,22 +395,25 @@ class Trinity:
                 stderr=subprocess.PIPE
             )
             if del_add.returncode != 0:
-                print(f"trinity测试出错:无法创建临时测试用户trinity_test.报错信息:{del_add.stderr.decode('utf-8')}")
-                sys.exit(1)
+                # 不能用 sys.exit:SystemExit 不被 main.py 捕获,会终止整个osmts运行
+                raise DefaultError(
+                    f"trinity测试出错:无法创建临时测试用户trinity_test,返回值:{del_add.returncode}."
+                    f"报错信息:{decode_output(del_add.stderr)}"
+                )
 
         if not self.user_home.exists():
             raise DefaultError(f"trinity测试出错:测试用户家目录不存在:{self.user_home}")
 
         try:
             subprocess.run(
-                f"git clone https://gitee.com/April_Zhao/trinity_{self.compiler}.git",
+                f"GIT_TERMINAL_PROMPT=0 git clone https://gitee.com/April_Zhao/trinity_{self.compiler}.git",
                 cwd=self.user_home,
                 shell=True,check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise GitCloneError(e.returncode,f'https://gitee.com/April_Zhao/trinity_{self.compiler}.git',e.stderr.decode('utf-8'))
+            raise GitCloneError(e.returncode,f'https://gitee.com/April_Zhao/trinity_{self.compiler}.git',decode_output(e.stderr))
 
         try:
             subprocess.run(
@@ -420,7 +424,7 @@ class Trinity:
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"trinity测试出错:configure和make失败.报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"trinity测试出错:configure和make失败.报错信息:{decode_output(e.stderr)}")
 
         try:
             subprocess.run(
@@ -431,22 +435,26 @@ class Trinity:
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"trinity测试出错:trinity_{self.compiler}目录的权限设置失败.报错信息:{e.stderr.decode('utf-8')}")
+            raise DefaultError(f"trinity测试出错:trinity_{self.compiler}目录的权限设置失败.报错信息:{decode_output(e.stderr)}")
 
 
     def run_test(self):
         try:
             trinity = subprocess.run(
                 f"""su - trinity_test -c 'cd {self.trinity_path} && ./trinity -N 10000'""",
-                shell=True,
+                shell=True,check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"trinity测试出错:configure和make失败.报错信息:{e.stderr.decode('utf-8')}")
+            # 原先缺 check=True,trinity 非0退出被当成正常,空日志也会生成报告
+            raise DefaultError(f"trinity测试出错:trinity运行失败,返回值:{e.returncode}.报错信息:{decode_output(e.stderr)}")
         else:
-            stdout = trinity.stdout.decode('utf-8', errors='replace')
-            stderr = trinity.stderr.decode('utf-8', errors='replace')
+            # default="":这里是"结果数据",必须让 None 保持为空。
+            # decode_output 默认哨兵 "(无输出)" 是真值,直接用在下面的
+            # if stderr.strip() 里会把"没有 stderr"误判成"有 stderr"
+            stdout = decode_output(trinity.stdout, default="")
+            stderr = decode_output(trinity.stderr, default="")
             self.test_result = stdout
             if stderr.strip():
                 self.test_result = f"{stdout}\n\n[stderr]\n{stderr}"
@@ -466,7 +474,7 @@ class Trinity:
         if userdel.returncode != 0:
             print(
                 "删除trinity的测试用户trinity_test失败,请手动执行[userdel trinity_test -r]."
-                f"报错信息:{userdel.stderr.decode('utf-8')}"
+                f"报错信息:{decode_output(userdel.stderr)}"
             )
 
 

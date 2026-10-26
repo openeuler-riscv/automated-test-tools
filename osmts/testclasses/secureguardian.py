@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment
 
 from .errors import DefaultError,RunError,SummaryError
+from .utils import decode_output
 
 
 class SecureGuardian:
@@ -68,15 +69,21 @@ class SecureGuardian:
         if self.directory.exists():
             shutil.rmtree(self.directory)
         self.directory.mkdir(parents=True)
+        # 已安装(run_checks在PATH中)则跳过rpm安装
+        if shutil.which('run_checks'):
+            print("secureguardian已安装,跳过rpm安装")
+            return
         try:
             subprocess.run(
-                "dnf install -y https://eulermaker.compass-ci.openeuler.openatom.cn/api/ems5/repositories/openEuler-24.09:epol/openEuler:24.09/x86_64/history/223fa6b8-65fc-11ef-9cf1-324c421ef8df/steps/upload/cbs.6161130/secureguardian-1.0.0-1.oe2409.noarch.rpm",
+                # noarch包,riscv64的25.09 EPOL仓库;若该链接失效,请手动安装源码后重试
+                "dnf install -y https://build-repo.tarsier-infra.isrc.ac.cn/openEuler:/25.09:/Epol/riscv64/Packages/secureguardian-1.0.0-2.oe2509.noarch.rpm",
                 shell=True,check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise DefaultError(f"secureguardian测试出错.安装rpm包失败,报错信息:{e.stderr.decode('utf-8')}")
+            print(f"rpm在线安装失败({decode_output(e.stderr)}),请先手动安装secureguardian源码后重试")
+            raise DefaultError(f"secureguardian测试出错.安装rpm包失败,报错信息:{decode_output(e.stderr)}")
 
 
     def run_test(self):
@@ -88,7 +95,7 @@ class SecureGuardian:
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise RunError(e.returncode,f"secureguardian测试出错.run_checks命令运行失败,报错信息:{e.stderr.decode('utf-8')}")
+            raise RunError(e.returncode,f"secureguardian测试出错.run_checks命令运行失败,报错信息:{decode_output(e.stderr)}")
 
         self.test_result = run_checks.stdout.decode('utf-8')
         shutil.copy2("/usr/local/secureguardian/reports/all_checks.results.html", self.directory)
